@@ -91,5 +91,21 @@ export function useChat(selectedRobotSN: string | null) {
     ]);
   }, []);
 
-  return { messages, isLoading, sendMessage, clearChat };
+  const resetWithGreeting = useCallback((robotName?: string) => {
+    const greeting = robotName
+      ? `Ready to command **${robotName}**. What's the next task?`
+      : "Hi! Select a robot above and I can help manage it.";
+
+    setMessages([
+      {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: greeting,
+        timestamp: Date.now(),
+        status: 'complete',
+      },
+    ]);
+  }, []);
+
+  return { messages, isLoading, sendMessage, clearChat, resetWithGreeting };
 }

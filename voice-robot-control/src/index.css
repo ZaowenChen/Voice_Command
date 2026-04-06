@@ -11,3 +11,30 @@ body {
 .bg-gray-850 {
   background-color: rgb(30, 33, 43);
 }
+
+/* Agent overlay slide-up animation */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.25s ease-out;
+}
+
+/* Progress bar animation */
+@keyframes progress-indeterminate {
+  0% { width: 20%; margin-left: 0; }
+  50% { width: 60%; margin-left: 20%; }
+  100% { width: 20%; margin-left: 80%; }
+}
+
+.animate-progress {
+  animation: progress-indeterminate 2s ease-in-out infinite;
+}

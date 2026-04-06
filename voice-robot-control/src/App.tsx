@@ -4,17 +4,20 @@ import { fetchRobots } from './services/api';
 import { useRobotStatus } from './hooks/useRobotStatus';
 import { useChat } from './hooks/useChat';
 import { useTTS } from './hooks/useTTS';
-import { Sidebar } from './components/Sidebar';
-import { ChatContainer } from './components/chat/ChatContainer';
+import { TopNav } from './components/dashboard/TopNav';
+import { Dashboard } from './components/dashboard/Dashboard';
+import { FloatingAgentButton } from './components/agent/FloatingAgentButton';
+import { AgentOverlay } from './components/agent/AgentOverlay';
 
 export default function App() {
   const [robots, setRobots] = useState<Robot[]>([]);
   const [selectedSN, setSelectedSN] = useState<string | null>(null);
   const [robotsLoading, setRobotsLoading] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
 
+  const selectedRobot = robots.find((r) => r.serialNumber === selectedSN) || null;
   const { status, currentMap, loading: statusLoading } = useRobotStatus(selectedSN);
-  const { messages, isLoading, sendMessage, clearChat } = useChat(selectedSN);
+  const { messages, isLoading, sendMessage, resetWithGreeting } = useChat(selectedSN);
   const { ttsEnabled, speak, toggleTTS } = useTTS();
 
   // Load robots on mount
@@ -25,62 +28,73 @@ export default function App() {
       .finally(() => setRobotsLoading(false));
   }, []);
 
-  // Auto-speak assistant replies
+  // Open agent and send a pre-filled command (from dashboard buttons)
+  const handleAgentCommand = useCallback(
+    (command: string) => {
+      if (!agentOpen) {
+        resetWithGreeting(selectedRobot?.displayName);
+        setAgentOpen(true);
+      }
+      // Small delay so the overlay renders before sending
+      setTimeout(() => {
+        sendMessage(command).then((reply) => {
+          if (reply && ttsEnabled) speak(reply);
+        });
+      }, 100);
+    },
+    [agentOpen, resetWithGreeting, selectedRobot, sendMessage, ttsEnabled, speak]
+  );
+
+  // Open agent overlay
+  const handleOpenAgent = useCallback(() => {
+    resetWithGreeting(selectedRobot?.displayName);
+    setAgentOpen(true);
+  }, [resetWithGreeting, selectedRobot]);
+
+  // Send message with TTS
   const handleSend = useCallback(
     async (text: string, isVoice?: boolean) => {
       const reply = await sendMessage(text, isVoice);
-      if (reply && ttsEnabled) {
-        speak(reply);
-      }
+      if (reply && ttsEnabled) speak(reply);
     },
     [sendMessage, ttsEnabled, speak]
   );
 
   return (
-    <div className="flex h-screen bg-gray-900 text-white">
-      {/* Sidebar */}
-      <Sidebar
+    <div className="min-h-screen bg-gray-900 text-white">
+      <TopNav
         robots={robots}
         selectedSN={selectedSN}
         onSelectRobot={setSelectedSN}
-        robotsLoading={robotsLoading}
-        status={status}
-        statusLoading={statusLoading}
-        currentMap={currentMap}
-        ttsEnabled={ttsEnabled}
-        onToggleTTS={toggleTTS}
-        onNewChat={clearChat}
-        isSidebarOpen={sidebarOpen}
-        onCloseSidebar={() => setSidebarOpen(false)}
+        loading={robotsLoading}
       />
 
-      {/* Main chat area */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Top bar (mobile) */}
-        <div className="lg:hidden flex items-center gap-3 px-4 py-3 border-b border-gray-700">
-          <button
-            className="text-gray-400 hover:text-white"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-          <h1 className="text-lg font-bold">VoBotiq</h1>
-          {selectedSN && status && (
-            <span className="ml-auto text-xs text-gray-500">
-              {robots.find((r) => r.serialNumber === selectedSN)?.displayName} &middot; {status.battery}%
-            </span>
-          )}
-        </div>
-
-        {/* Chat */}
-        <ChatContainer
-          messages={messages}
-          isLoading={isLoading}
-          onSend={handleSend}
+      <main className="max-w-6xl mx-auto px-4 py-6">
+        <Dashboard
+          robot={selectedRobot}
+          status={status}
+          statusLoading={statusLoading}
+          currentMap={currentMap}
+          onAgentCommand={handleAgentCommand}
         />
       </main>
+
+      {/* Floating Agent */}
+      <FloatingAgentButton
+        onClick={handleOpenAgent}
+        isOpen={agentOpen}
+        hasNewMessage={false}
+      />
+
+      <AgentOverlay
+        isOpen={agentOpen}
+        onClose={() => setAgentOpen(false)}
+        messages={messages}
+        isLoading={isLoading}
+        onSend={handleSend}
+        ttsEnabled={ttsEnabled}
+        onToggleTTS={toggleTTS}
+      />
     </div>
   );
 }
