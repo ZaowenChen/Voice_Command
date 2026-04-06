@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Custom bg color between gray-800 and gray-900 */
+.bg-gray-850 {
+  background-color: rgb(30, 33, 43);
+}

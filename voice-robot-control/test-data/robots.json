@@ -1,0 +1,5 @@
+[
+  { "serialNumber": "TEST00-0000-000-S001", "displayName": "Scrubber-Lobby", "modelTypeCode": "Scrubber 75", "online": true },
+  { "serialNumber": "TEST00-0000-000-S002", "displayName": "Scrubber-Floor2", "modelTypeCode": "Scrubber 50", "online": true },
+  { "serialNumber": "TEST00-0000-000-S003", "displayName": "Vacuum-Main", "modelTypeCode": "Phantas", "online": false }
+]
