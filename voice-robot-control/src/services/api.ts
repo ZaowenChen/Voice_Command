@@ -65,3 +65,15 @@ export async function sendRobotCommand(sn: string, commandBody: any): Promise<an
     body: JSON.stringify(commandBody),
   });
 }
+
+// ── Chat API ──
+
+export async function sendChatMessage(
+  messages: Array<{ role: string; content: string }>,
+  selectedRobotSN?: string
+): Promise<{ reply: string; toolCalls?: Array<{ toolName: string; args: Record<string, any>; result?: string }> }> {
+  return fetchJSON('/chat', {
+    method: 'POST',
+    body: JSON.stringify({ messages, selectedRobotSN }),
+  });
+}

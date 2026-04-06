@@ -62,3 +62,21 @@ export interface CommandHistoryEntry {
   result: 'success' | 'error' | 'pending';
   errorMessage?: string;
 }
+
+// ── Chat types ──
+
+export interface ToolCallRecord {
+  toolName: string;
+  args: Record<string, any>;
+  result?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  isVoice?: boolean;
+  toolCalls?: ToolCallRecord[];
+  status?: 'sending' | 'thinking' | 'complete' | 'error';
+}

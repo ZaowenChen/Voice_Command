@@ -1,41 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Robot, CommandHistoryEntry } from './types';
+import type { Robot } from './types';
 import { fetchRobots } from './services/api';
 import { useRobotStatus } from './hooks/useRobotStatus';
-import { useVoiceCommand } from './hooks/useVoiceCommand';
-import { RobotSelector } from './components/RobotSelector';
-import { RobotStatusPanel } from './components/RobotStatusPanel';
-import { LocalizationWarning } from './components/LocalizationWarning';
-import { TaskList } from './components/TaskList';
-import { NavigationPoints } from './components/NavigationPoints';
-import { VoiceButton } from './components/VoiceButton';
-import { TranscriptDisplay } from './components/TranscriptDisplay';
-import { CommandConfirmation } from './components/CommandConfirmation';
-import { CommandHistory } from './components/CommandHistory';
+import { useChat } from './hooks/useChat';
+import { useTTS } from './hooks/useTTS';
+import { Sidebar } from './components/Sidebar';
+import { ChatContainer } from './components/chat/ChatContainer';
 
 export default function App() {
   const [robots, setRobots] = useState<Robot[]>([]);
   const [selectedSN, setSelectedSN] = useState<string | null>(null);
   const [robotsLoading, setRobotsLoading] = useState(true);
-  const [history, setHistory] = useState<CommandHistoryEntry[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const { status, currentMap, loading: statusLoading } = useRobotStatus(selectedSN);
+  const { messages, isLoading, sendMessage, clearChat } = useChat(selectedSN);
+  const { ttsEnabled, speak, toggleTTS } = useTTS();
 
-  const handleCommandComplete = useCallback((entry: CommandHistoryEntry) => {
-    setHistory((h) => [...h, entry]);
-  }, []);
-
-  const {
-    isRecording,
-    isProcessing,
-    transcript,
-    command,
-    commandResult,
-    error,
-    startRecording,
-    stopRecording,
-  } = useVoiceCommand(selectedSN, currentMap, handleCommandComplete);
-
+  // Load robots on mount
   useEffect(() => {
     fetchRobots()
       .then(setRobots)
@@ -43,52 +25,62 @@ export default function App() {
       .finally(() => setRobotsLoading(false));
   }, []);
 
+  // Auto-speak assistant replies
+  const handleSend = useCallback(
+    async (text: string, isVoice?: boolean) => {
+      const reply = await sendMessage(text, isVoice);
+      if (reply && ttsEnabled) {
+        speak(reply);
+      }
+    },
+    [sendMessage, ttsEnabled, speak]
+  );
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <div className="max-w-2xl mx-auto p-4 space-y-4">
-        {/* Header */}
-        <h1 className="text-xl font-bold text-center">Robot Voice Control</h1>
+    <div className="flex h-screen bg-gray-900 text-white">
+      {/* Sidebar */}
+      <Sidebar
+        robots={robots}
+        selectedSN={selectedSN}
+        onSelectRobot={setSelectedSN}
+        robotsLoading={robotsLoading}
+        status={status}
+        statusLoading={statusLoading}
+        currentMap={currentMap}
+        ttsEnabled={ttsEnabled}
+        onToggleTTS={toggleTTS}
+        onNewChat={clearChat}
+        isSidebarOpen={sidebarOpen}
+        onCloseSidebar={() => setSidebarOpen(false)}
+      />
 
-        {/* Robot Selector + Status */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-gray-850 rounded-xl p-4 border border-gray-700">
-          <RobotSelector
-            robots={robots}
-            selectedSN={selectedSN}
-            onSelect={setSelectedSN}
-            loading={robotsLoading}
-          />
-          <RobotStatusPanel status={status} loading={statusLoading} />
+      {/* Main chat area */}
+      <main className="flex-1 flex flex-col min-w-0">
+        {/* Top bar (mobile) */}
+        <div className="lg:hidden flex items-center gap-3 px-4 py-3 border-b border-gray-700">
+          <button
+            className="text-gray-400 hover:text-white"
+            onClick={() => setSidebarOpen(true)}
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <h1 className="text-lg font-bold">VoBotiq</h1>
+          {selectedSN && status && (
+            <span className="ml-auto text-xs text-gray-500">
+              {robots.find((r) => r.serialNumber === selectedSN)?.displayName} &middot; {status.battery}%
+            </span>
+          )}
         </div>
 
-        {/* Localization Warning */}
-        {status && <LocalizationWarning localized={status.localized} />}
-
-        {/* Tasks + Navigation */}
-        {selectedSN && (
-          <div className="grid grid-cols-2 gap-4 bg-gray-850 rounded-xl p-4 border border-gray-700">
-            <TaskList currentMap={currentMap} />
-            <NavigationPoints currentMap={currentMap} />
-          </div>
-        )}
-
-        {/* Voice Control Section */}
-        <div className="flex flex-col items-center gap-4 bg-gray-850 rounded-xl p-6 border border-gray-700">
-          <VoiceButton
-            isRecording={isRecording}
-            isProcessing={isProcessing}
-            disabled={!selectedSN}
-            onMouseDown={startRecording}
-            onMouseUp={stopRecording}
-          />
-          <TranscriptDisplay transcript={transcript} isProcessing={isProcessing} />
-          <CommandConfirmation command={command} result={commandResult} error={error} />
-        </div>
-
-        {/* History */}
-        <div className="bg-gray-850 rounded-xl p-4 border border-gray-700">
-          <CommandHistory history={history} />
-        </div>
-      </div>
+        {/* Chat */}
+        <ChatContainer
+          messages={messages}
+          isLoading={isLoading}
+          onSend={handleSend}
+        />
+      </main>
     </div>
   );
 }
