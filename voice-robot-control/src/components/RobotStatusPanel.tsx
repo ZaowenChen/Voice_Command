@@ -30,6 +30,8 @@ export function RobotStatusPanel({ status, loading }: Props) {
     error: 'text-red-400',
   };
 
+  const hasPuduWater = status.cleanWater != null || status.dirtyWater != null;
+
   return (
     <div className="space-y-2">
       <h3 className="text-sm font-medium text-gray-400">Robot Status</h3>
@@ -60,6 +62,31 @@ export function RobotStatusPanel({ status, loading }: Props) {
           <span className="text-gray-500">Task: </span>
           <span className="text-white">{status.currentTask || 'None'}</span>
         </div>
+
+        {hasPuduWater && (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">Clean water:</span>
+              <span className="text-blue-400">{status.cleanWater ?? 0}%</span>
+              <div className="flex-1 bg-gray-700 rounded-full h-2 max-w-[80px]">
+                <div
+                  className="h-2 rounded-full bg-blue-500"
+                  style={{ width: `${status.cleanWater ?? 0}%` }}
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">Dirty water:</span>
+              <span className="text-amber-600">{status.dirtyWater ?? 0}%</span>
+              <div className="flex-1 bg-gray-700 rounded-full h-2 max-w-[80px]">
+                <div
+                  className="h-2 rounded-full bg-amber-700"
+                  style={{ width: `${status.dirtyWater ?? 0}%` }}
+                />
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

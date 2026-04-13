@@ -3,6 +3,7 @@ export interface Robot {
   displayName: string;
   modelTypeCode: string;
   online: boolean;
+  robotType?: 'gausium' | 'pudu';
 }
 
 export interface RobotStatus {
@@ -14,6 +15,8 @@ export interface RobotStatus {
   currentTask: string | null;
   taskState: 'idle' | 'running' | 'paused' | 'error';
   position: { x: number; y: number; angle: number } | null;
+  cleanWater?: number;   // Pudu only: clean water level (0-100)
+  dirtyWater?: number;   // Pudu only: dirty water level (0-100)
 }
 
 export interface SiteInfo {

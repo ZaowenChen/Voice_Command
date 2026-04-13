@@ -1,7 +1,7 @@
 # CLAUDE.md - Project Context for Claude Code
 
 ## Project Overview
-VoBotiq is an agentic chatbot for controlling Gausium cleaning robots. Operators interact through natural conversation (text or voice) and the bot autonomously fetches robot info and executes commands using OpenAI function calling.
+VoBotiq is an agentic chatbot for controlling cleaning robots (Gausium and Pudu). Operators interact through natural conversation (text or voice) and the bot autonomously fetches robot info and executes commands using OpenAI function calling.
 
 ## Commands
 - `npm run dev` - Start both backend (port 3001) and frontend (port 5173) concurrently
@@ -12,7 +12,7 @@ VoBotiq is an agentic chatbot for controlling Gausium cleaning robots. Operators
 - **Frontend**: React + TypeScript + Vite + Tailwind. Chat-based UI with sidebar.
 - **Backend**: Express + TypeScript. Key endpoint is `POST /api/chat` which runs an agentic tool-use loop.
 - **AI**: OpenAI GPT-4o-mini with function calling for reasoning, Whisper for speech-to-text.
-- **Robot API**: Gausium Cloud API at `https://openapi.gs-robot.com`. Auth uses a custom OAuth grant type.
+- **Robot API**: Gausium Cloud API at `https://openapi.gs-robot.com` (custom OAuth grant type) and Pudu API at `https://open.pudutech.com` (Bearer token auth).
 
 ## Key Files
 - `server/routes/chat.ts` - The core agentic chat endpoint. Runs a loop: call OpenAI → if tool_calls, execute tools → feed results back → repeat until text response.
@@ -20,14 +20,17 @@ VoBotiq is an agentic chatbot for controlling Gausium cleaning robots. Operators
 - `server/services/chat-system-prompt.ts` - System prompt that defines the bot's personality and behavioral guidelines.
 - `server/services/gausium-api.ts` - Gausium API client. Uses `/v1alpha1/` endpoints (not v2alpha1 which requires gRPC).
 - `server/services/gausium-auth.ts` - Token management. The `open_access_key` parameter uses the AccessKeySecret, not the AccessKeyID.
+- `server/services/pudu-api.ts` - Pudu API client. Uses Bearer token auth. Endpoints: robot detail, task list, task exec.
 - `src/hooks/useChat.ts` - Frontend conversation state. Sends full message history to `/api/chat`, handles thinking/error states.
 - `src/hooks/useTTS.ts` - Browser SpeechSynthesis for voice replies.
 - `src/components/chat/` - Chat UI components (MessageBubble, ChatInput, etc.)
 
 ## Environment
-- `.env` must contain: `OPENAI_API_KEY`, `GAUSIUM_CLIENT_ID`, `GAUSIUM_CLIENT_SECRET`, `GAUSIUM_OPEN_ACCESS_KEY`, `SERVER_PORT=3001`
+- `.env` must contain: `OPENAI_API_KEY`, `SERVER_PORT=3001`
+- Gausium (optional): `GAUSIUM_CLIENT_ID`, `GAUSIUM_CLIENT_SECRET`, `GAUSIUM_OPEN_ACCESS_KEY`
+- Pudu (optional): `PUDU_BASE_URL`, `PUDU_API_KEY`, `PUDU_ROBOT_SNS` (comma-separated list of serial numbers)
 - Use `SERVER_PORT` (not `PORT`) to avoid conflicts with Vite's preview tools which set PORT.
-- If Gausium credentials are missing, all robot endpoints fall back to mock data in `test-data/robots.json`.
+- If credentials are missing for a provider, its robot endpoints fall back to mock data in `test-data/robots.json`.
 
 ## Gausium API Gotchas
 - Auth endpoint: `POST /gas/api/v1alpha1/oauth/token` with `grant_type: "urn:gaussian:params:oauth:grant-type:open-access-token"`
@@ -35,6 +38,15 @@ VoBotiq is an agentic chatbot for controlling Gausium cleaning robots. Operators
 - Robot status: use `/v1alpha1/robots/{sn}/status` (JSON). The `/openapi/v2alpha1/` version requires gRPC content type.
 - `getSiteInfo` may return "robot is not on a site" — the code falls back to building site info from the status response.
 - Battery is at `battery.powerPercentage`, localization at `localizationInfo.localizationState` ("NORMAL" = localized).
+
+## Pudu API Notes
+- Base URL: `https://open.pudutech.com` (override with `PUDU_BASE_URL`)
+- Auth: Bearer token from `PUDU_API_KEY` env var
+- Robot detail: `GET /cleanbot-service/v1/api/open/robot/detail?sn={sn}`
+- Task list: `GET /cleanbot-service/v1/api/open/task/list?sn={sn}` — filter `status === 1` (active)
+- Task exec: `POST /cleanbot-service/v1/api/open/task/exec` — type 3 for clean tasks, type 5 for return-to-base
+- Pudu robots report `cleanWater` (rising) and `dirtyWater` (sewage) levels (0-100)
+- Robot type is determined by `robotType` field in `test-data/robots.json` or by which credentials are configured
 
 ## Code Style
 - TypeScript strict mode
