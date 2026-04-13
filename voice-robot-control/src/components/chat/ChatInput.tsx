@@ -2,6 +2,8 @@ import { useState, useRef, useCallback } from 'react';
 import { useAudioRecorder } from '../../hooks/useAudioRecorder';
 import { sendVoiceAudio } from '../../services/api';
 
+const HOLD_THRESHOLD_MS = 300; // Press longer than this = hold-to-talk mode
+
 interface Props {
   onSend: (text: string, isVoice?: boolean) => void;
   disabled: boolean;
@@ -12,6 +14,8 @@ export function ChatInput({ onSend, disabled }: Props) {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const { isRecording, startRecording, stopRecording } = useAudioRecorder();
   const inputRef = useRef<HTMLInputElement>(null);
+  const pressStartRef = useRef<number>(0);
+  const isHoldingRef = useRef(false);
 
   const handleSend = useCallback(() => {
     if (text.trim() && !disabled) {
@@ -31,38 +35,76 @@ export function ChatInput({ onSend, disabled }: Props) {
     [handleSend]
   );
 
-  const handleMicToggle = useCallback(async () => {
-    if (isRecording) {
-      // Stop recording and transcribe
-      setIsTranscribing(true);
-      try {
-        const blob = await stopRecording();
-        if (blob.size > 0) {
-          const { transcript } = await sendVoiceAudio(blob);
-          if (transcript.trim()) {
-            onSend(transcript.trim(), true);
-          }
+  // Shared stop-and-transcribe logic
+  const stopAndTranscribe = useCallback(async () => {
+    setIsTranscribing(true);
+    try {
+      const blob = await stopRecording();
+      if (blob.size > 0) {
+        const { transcript } = await sendVoiceAudio(blob);
+        if (transcript.trim()) {
+          onSend(transcript.trim(), true);
         }
-      } catch (err: any) {
-        console.error('Voice error:', err);
-      } finally {
-        setIsTranscribing(false);
       }
-    } else {
+    } catch (err: any) {
+      console.error('Voice error:', err);
+    } finally {
+      setIsTranscribing(false);
+      isHoldingRef.current = false;
+    }
+  }, [stopRecording, onSend]);
+
+  // Mic button press start (mousedown / touchstart)
+  const handleMicDown = useCallback(
+    async (e: React.MouseEvent | React.TouchEvent) => {
+      e.preventDefault();
+      if (disabled || isTranscribing) return;
+
+      // If already recording (toggle mode was active), treat as stop
+      if (isRecording) {
+        await stopAndTranscribe();
+        return;
+      }
+
+      pressStartRef.current = Date.now();
+      isHoldingRef.current = true;
+
       try {
         await startRecording();
       } catch {
         // Mic access denied
+        isHoldingRef.current = false;
       }
-    }
-  }, [isRecording, startRecording, stopRecording, onSend]);
+    },
+    [disabled, isTranscribing, isRecording, startRecording, stopAndTranscribe]
+  );
+
+  // Mic button release (mouseup / touchend / mouseleave)
+  const handleMicUp = useCallback(
+    async (e: React.MouseEvent | React.TouchEvent) => {
+      e.preventDefault();
+      if (!isRecording || !isHoldingRef.current) return;
+
+      const pressDuration = Date.now() - pressStartRef.current;
+
+      if (pressDuration >= HOLD_THRESHOLD_MS) {
+        // Hold-to-talk: release stops recording and sends
+        await stopAndTranscribe();
+      } else {
+        // Short tap: leave recording running (toggle mode)
+        // User will tap again to stop
+        isHoldingRef.current = false;
+      }
+    },
+    [isRecording, stopAndTranscribe]
+  );
 
   const micBusy = isRecording || isTranscribing;
 
   return (
     <div className="border-t border-gray-700 px-4 py-3 bg-gray-900">
       <div className="flex items-center gap-2">
-        {/* Mic button */}
+        {/* Mic button — supports both tap-to-toggle and hold-to-talk */}
         <button
           className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-all ${
             isRecording
@@ -71,9 +113,13 @@ export function ChatInput({ onSend, disabled }: Props) {
               ? 'bg-yellow-600 text-white animate-pulse'
               : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
           }`}
-          onClick={handleMicToggle}
+          onMouseDown={handleMicDown}
+          onMouseUp={handleMicUp}
+          onMouseLeave={handleMicUp}
+          onTouchStart={handleMicDown}
+          onTouchEnd={handleMicUp}
           disabled={disabled || isTranscribing}
-          title={isRecording ? 'Stop recording' : 'Start recording'}
+          title={isRecording ? 'Release or tap to stop' : 'Tap or hold to talk'}
         >
           {isTranscribing ? (
             <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -118,7 +164,7 @@ export function ChatInput({ onSend, disabled }: Props) {
       {/* Recording indicator */}
       {isRecording && (
         <p className="text-xs text-red-400 mt-1 ml-12 animate-pulse">
-          Recording... Click mic to stop
+          {isHoldingRef.current ? 'Release to send...' : 'Recording... Tap mic to stop'}
         </p>
       )}
     </div>

@@ -5,16 +5,11 @@ const BASE = 'https://openapi.gs-robot.com';
 
 async function gausiumFetch(path: string, options: RequestInit = {}) {
   const token = await getAccessToken();
-  // v2 endpoints need grpc-web content type for GET, v1 uses JSON
-  const isV2 = path.includes('v2alpha1');
-  const defaultContentType = isV2 && !options.method
-    ? 'application/grpc-web+proto'
-    : 'application/json';
 
   const res = await fetch(`${BASE}${path}`, {
     ...options,
     headers: {
-      'Content-Type': defaultContentType,
+      'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
       ...options.headers,
     },

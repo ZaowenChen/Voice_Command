@@ -221,6 +221,51 @@ function buildCommandBody(
   }
 }
 
+// ── Error Classification ──
+
+interface StructuredError {
+  error: 'AUTH_ERROR' | 'COMMAND_REJECTED' | 'NETWORK_ERROR' | 'UNKNOWN_ERROR';
+  reason: string;
+  retryable: boolean;
+}
+
+function classifyError(err: any): StructuredError {
+  const msg = String(err.message || err).toLowerCase();
+
+  // Authentication errors
+  if (msg.includes('401') || msg.includes('403') || msg.includes('auth') || msg.includes('token')) {
+    return { error: 'AUTH_ERROR', reason: err.message, retryable: true };
+  }
+
+  // Command rejections (robot refused the command)
+  if (
+    msg.includes('400') ||
+    msg.includes('409') ||
+    msg.includes('422') ||
+    msg.includes('rejected') ||
+    msg.includes('not localized') ||
+    msg.includes('not on a site') ||
+    msg.includes('invalid')
+  ) {
+    return { error: 'COMMAND_REJECTED', reason: err.message, retryable: false };
+  }
+
+  // Network / server errors
+  if (
+    msg.includes('econnrefused') ||
+    msg.includes('etimedout') ||
+    msg.includes('500') ||
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('network') ||
+    msg.includes('fetch')
+  ) {
+    return { error: 'NETWORK_ERROR', reason: err.message, retryable: true };
+  }
+
+  return { error: 'UNKNOWN_ERROR', reason: err.message, retryable: false };
+}
+
 // ── Tool Executor ──
 
 export async function executeTool(
@@ -291,14 +336,31 @@ export async function executeTool(
                 }
               }
             }
-          } catch {}
+          } catch (posErr: any) {
+            console.warn(`[chat-tools] Failed to fetch positions for navigation: ${posErr.message}`);
+          }
         }
 
         const body = buildCommandBody(sn, commandType, { ...args, positions });
 
+        // Log navigation commands for format verification (#10)
+        if (commandType === 'CROSS_NAVIGATE') {
+          console.log(`[chat-tools] CROSS_NAVIGATE request body:`, JSON.stringify(body, null, 2));
+        }
+
         if (hasGausiumCredentials()) {
-          const result = await gausiumApi.sendCommand(sn, body);
-          return JSON.stringify({ success: true, data: result });
+          try {
+            const result = await gausiumApi.sendCommand(sn, body);
+            if (commandType === 'CROSS_NAVIGATE') {
+              console.log(`[chat-tools] CROSS_NAVIGATE response:`, JSON.stringify(result));
+            }
+            return JSON.stringify({ success: true, data: result });
+          } catch (cmdErr: any) {
+            // Structured error feedback (#4)
+            const structured = classifyError(cmdErr);
+            console.error(`[chat-tools] Command ${commandType} failed:`, structured);
+            return JSON.stringify(structured);
+          }
         }
         console.log(`[mock-command] ${sn}:`, JSON.stringify(body));
         return JSON.stringify({ success: true, data: { message: 'Mock command accepted' } });
@@ -308,6 +370,7 @@ export async function executeTool(
         return JSON.stringify({ error: `Unknown tool: ${name}` });
     }
   } catch (err: any) {
-    return JSON.stringify({ error: err.message });
+    const structured = classifyError(err);
+    return JSON.stringify(structured);
   }
 }

@@ -16,7 +16,7 @@ export default function App() {
   const [agentOpen, setAgentOpen] = useState(false);
 
   const selectedRobot = robots.find((r) => r.serialNumber === selectedSN) || null;
-  const { status, currentMap, loading: statusLoading } = useRobotStatus(selectedSN);
+  const { status, currentMap, loading: statusLoading, refreshNow } = useRobotStatus(selectedSN);
   const { messages, isLoading, sendMessage, resetWithGreeting } = useChat(selectedSN);
   const { ttsEnabled, speak, toggleTTS } = useTTS();
 
@@ -39,10 +39,12 @@ export default function App() {
       setTimeout(() => {
         sendMessage(command).then((reply) => {
           if (reply && ttsEnabled) speak(reply);
+          // Refresh robot status after command to reflect changes faster
+          setTimeout(() => refreshNow(), 1500);
         });
       }, 100);
     },
-    [agentOpen, resetWithGreeting, selectedRobot, sendMessage, ttsEnabled, speak]
+    [agentOpen, resetWithGreeting, selectedRobot, sendMessage, ttsEnabled, speak, refreshNow]
   );
 
   // Open agent overlay
@@ -56,8 +58,10 @@ export default function App() {
     async (text: string, isVoice?: boolean) => {
       const reply = await sendMessage(text, isVoice);
       if (reply && ttsEnabled) speak(reply);
+      // Refresh robot status after any message (may have triggered a command)
+      setTimeout(() => refreshNow(), 1500);
     },
-    [sendMessage, ttsEnabled, speak]
+    [sendMessage, ttsEnabled, speak, refreshNow]
   );
 
   return (
