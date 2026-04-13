@@ -38,3 +38,18 @@ body {
 .animate-progress {
   animation: progress-indeterminate 2s ease-in-out infinite;
 }
+
+/* Page fade-in animation */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+/* Smooth toggle transitions */
+input[type="checkbox"]:checked + span {
+  background-color: #2563EB;
+}
