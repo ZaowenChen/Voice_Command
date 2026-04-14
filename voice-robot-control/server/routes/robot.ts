@@ -276,22 +276,42 @@ router.get('/robots/:sn/site', async (req, res) => {
   try {
     if (type === 'pudu' && hasPuduCredentials()) {
       const ps = await puduApi.getPuduRobotStatus(sn);
-      const tasks = await puduApi.getPuduTaskList(sn, ps.mapName);
+      const tasks = await puduApi.getPuduTaskList(sn, {
+        mapName: ps.mapName,
+        mapLv: ps.mapLv,
+      });
+
+      // Group tasks by map so duplicate names (e.g. two "Carpet Run"
+      // entries on different maps) are distinguishable in the sidebar.
+      const currentMap = ps.mapName || 'Current Map';
+      const byMap = new Map<string, typeof tasks>();
+      for (const t of tasks) {
+        const key = t.mapName || currentMap;
+        if (!byMap.has(key)) byMap.set(key, []);
+        byMap.get(key)!.push(t);
+      }
+      const mapNames = Array.from(byMap.keys()).sort((a, b) => {
+        if (a === currentMap) return -1;
+        if (b === currentMap) return 1;
+        return a.localeCompare(b);
+      });
+
       return res.json({
         buildings: [
           {
-            name: 'Site',
+            name: ps.shopName || 'Site',
             floors: [
               {
-                name: 'Current Floor',
-                maps: [
-                  {
-                    id: 'pudu-default',
-                    name: ps.mapName || 'Current Map',
-                    tasks: tasks.map((t) => ({ name: t.name, id: t.task_id })),
-                    positions: [],
-                  },
-                ],
+                name: `Robot is on: ${currentMap}`,
+                maps: mapNames.map((mapName) => ({
+                  id: `pudu-${mapName}`,
+                  name: mapName,
+                  tasks: (byMap.get(mapName) || []).map((t) => ({
+                    name: t.name,
+                    id: t.task_id,
+                  })),
+                  positions: [],
+                })),
               },
             ],
           },
@@ -339,6 +359,39 @@ router.post('/robots/:sn/commands', async (req, res) => {
   } catch (err: any) {
     console.error(`[command] Error for ${sn}:`, err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── Debug: raw Pudu dump ──
+// GET /api/debug/pudu/:sn — returns the raw robot/detail and task/list
+// responses from Pudu with no filtering, grouping, or transformation.
+// Use this to see exactly what Pudu is reporting, end-to-end.
+router.get('/debug/pudu/:sn', async (req, res) => {
+  const { sn } = req.params;
+  if (!hasPuduCredentials()) {
+    return res.status(400).json({ error: 'Pudu credentials not configured' });
+  }
+  try {
+    const detail = await puduApi.getPuduRobotDetailRaw(sn);
+    const taskList = await puduApi.getPuduTaskListRaw(sn);
+    // Extract just the fields that matter for the missing-task diagnosis
+    const summary = {
+      robot_current_map: detail?.data?.map ?? null,
+      robot_shop: detail?.data?.shop ?? null,
+      robot_mac: detail?.data?.mac ?? null,
+      task_count: taskList?.data?.count ?? 0,
+      task_map_names: Array.from(
+        new Set(
+          (taskList?.data?.item || []).flatMap((t: any) =>
+            (t.floor_list || []).map((f: any) => f?.map?.name).filter(Boolean)
+          )
+        )
+      ).sort(),
+      task_names: (taskList?.data?.item || []).map((t: any) => t.name),
+    };
+    res.json({ summary, robot_detail_raw: detail, task_list_raw: taskList });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

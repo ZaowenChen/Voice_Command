@@ -479,6 +479,65 @@ function buildTempTaskBody(
 // Pudu task cache: sn → PuduTask[] (populated during get_site_info)
 const puduTaskCache = new Map<string, puduApi.PuduTask[]>();
 
+/**
+ * Build a SiteInfo for a Pudu robot by grouping tasks by their map name.
+ * This makes two tasks that share a name (e.g. two "Carpet Run" entries
+ * on different maps) distinguishable — each becomes a task under its own
+ * map entry, with the map name as its id so it can be disambiguated by
+ * `map_id` when starting the task.
+ */
+function buildPuduSiteInfo(
+  ps: puduApi.PuduRobotStatus,
+  tasks: puduApi.PuduTask[]
+) {
+  // Group tasks by mapName. Tasks with no mapName go under the robot's
+  // current map as a fallback bucket.
+  const currentMap = ps.mapName || 'Current Map';
+  const byMap = new Map<string, puduApi.PuduTask[]>();
+  for (const t of tasks) {
+    const key = t.mapName || currentMap;
+    if (!byMap.has(key)) byMap.set(key, []);
+    byMap.get(key)!.push(t);
+  }
+
+  // Sort maps so the robot's current map (if present) comes first — gives
+  // the agent an obvious default when the user doesn't specify a map.
+  const mapNames = Array.from(byMap.keys()).sort((a, b) => {
+    if (a === currentMap) return -1;
+    if (b === currentMap) return 1;
+    return a.localeCompare(b);
+  });
+
+  return {
+    buildings: [
+      {
+        name: ps.shopName || 'Site',
+        floors: [
+          {
+            name: `Robot is on: ${currentMap}`,
+            maps: mapNames.map((mapName) => ({
+              // Prefix with "pudu-" so the agent can pass this back as map_id
+              // and we can route it in send_command.
+              id: `pudu-${mapName}`,
+              name: mapName,
+              tasks: (byMap.get(mapName) || []).map((t) => ({
+                name: t.name,
+                id: t.task_id,
+              })),
+              positions: [],
+            })),
+          },
+        ],
+      },
+    ],
+    notOnSite: tasks.length > 0 && !tasks.some((t) => t.mapName === currentMap),
+    note:
+      tasks.length > 0 && !tasks.some((t) => t.mapName === currentMap)
+        ? `The robot is localized on "${currentMap}", but no tasks are defined on that map. Showing all available tasks grouped by their map — the robot will need to be re-localized on the target task's map before START_TASK can succeed.`
+        : undefined,
+  };
+}
+
 async function executePuduCommand(
   sn: string,
   commandType: string,
@@ -488,18 +547,53 @@ async function executePuduCommand(
     case 'START_TASK': {
       // Find task_id and version from cached task list
       const tasks = puduTaskCache.get(sn) || [];
-      const match = tasks.find(
-        (t) => t.name.toLowerCase() === (args.task_name || '').toLowerCase()
-      );
-      if (!match) {
-        return JSON.stringify({ error: `Task "${args.task_name}" not found. Use get_site_info first to see available tasks.` });
+      const wantedName = (args.task_name || '').toLowerCase();
+      const candidates = tasks.filter((t) => t.name.toLowerCase() === wantedName);
+
+      if (candidates.length === 0) {
+        return JSON.stringify({
+          error: `Task "${args.task_name}" not found. Use get_site_info first to see available tasks.`,
+        });
       }
+
+      // Disambiguate duplicate task names by map_id. The agent passes the
+      // "pudu-<mapName>" id from get_site_info when selecting a specific
+      // map's task. If map_id is provided, narrow candidates to that map.
+      let match = candidates[0];
+      if (candidates.length > 1) {
+        const wantedMap =
+          typeof args.map_id === 'string' && args.map_id.startsWith('pudu-')
+            ? args.map_id.slice('pudu-'.length)
+            : null;
+        if (wantedMap) {
+          const narrowed = candidates.find((t) => t.mapName === wantedMap);
+          if (narrowed) {
+            match = narrowed;
+          } else {
+            return JSON.stringify({
+              error: `Task "${args.task_name}" exists on multiple maps but not on "${wantedMap}". Available on: ${candidates
+                .map((c) => c.mapName || 'unknown')
+                .join(', ')}`,
+            });
+          }
+        } else {
+          return JSON.stringify({
+            error: `Task "${args.task_name}" is defined on multiple maps (${candidates
+              .map((c) => c.mapName || 'unknown')
+              .join(', ')}). Please specify which map by passing map_id.`,
+          });
+        }
+      }
+
       const taskId = await puduApi.sendPuduCommand(sn, 3, {
         status: 1,
         task_id: match.task_id,
         version: match.version,
       });
-      return JSON.stringify({ success: true, data: { task_id: taskId } });
+      return JSON.stringify({
+        success: true,
+        data: { task_id: taskId, map: match.mapName },
+      });
     }
     case 'PAUSE_TASK': {
       const taskId = await puduApi.sendPuduCommand(sn, 3, { status: 3 });
@@ -684,28 +778,12 @@ export async function executeTool(
           if (hasPuduCredentials()) {
             try {
               const ps = await puduApi.getPuduRobotStatus(sn);
-              const tasks = await puduApi.getPuduTaskList(sn, ps.mapName);
-              puduTaskCache.set(sn, tasks);
-              return JSON.stringify({
-                buildings: [
-                  {
-                    name: 'Site',
-                    floors: [
-                      {
-                        name: 'Current Floor',
-                        maps: [
-                          {
-                            id: 'pudu-default',
-                            name: ps.mapName || 'Current Map',
-                            tasks: tasks.map((t) => ({ name: t.name, id: t.task_id })),
-                            positions: [],
-                          },
-                        ],
-                      },
-                    ],
-                  },
-                ],
+              const tasks = await puduApi.getPuduTaskList(sn, {
+                mapName: ps.mapName,
+                mapLv: ps.mapLv,
               });
+              puduTaskCache.set(sn, tasks);
+              return JSON.stringify(buildPuduSiteInfo(ps, tasks));
             } catch (err: any) {
               console.warn(`[chat-tools] get_site_info Pudu failed for ${sn}: ${err?.message || err}`);
               return JSON.stringify({

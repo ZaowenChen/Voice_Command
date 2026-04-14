@@ -81,11 +81,14 @@ export interface PuduRobotStatus {
   online: boolean;
   battery: number;
   mapName: string | null;
+  /** Map level identifier from Pudu (stable numeric id for a floor/map). */
+  mapLv: number | null;
   taskState: 'idle' | 'running' | 'paused' | 'error';
   currentTask: string | null;
   cleanWater: number;
   dirtyWater: number;
   shopName: string | null;
+  shopId: number | null;
 }
 
 export interface PuduTask {
@@ -94,6 +97,11 @@ export interface PuduTask {
   name: string;
   desc: string;
   mode: number; // 1=mop, 2=sweep
+  /** Map name this task is defined on (first entry in floor_list). Used to
+   * disambiguate duplicate task names and to show which map a task runs on. */
+  mapName: string | null;
+  /** Floor string from the task's floor_list entry (e.g. "1", "3"). */
+  floor: string | null;
 }
 
 // ── Machine state code → taskState mapping ──
@@ -113,6 +121,20 @@ function mapPuduCleanStatus(status: number | null | undefined): PuduRobotStatus[
 
 // ── API Functions ──
 
+/**
+ * Raw, unfiltered robot/detail response. For debugging only.
+ */
+export async function getPuduRobotDetailRaw(sn: string): Promise<any> {
+  return puduFetch(`/cleanbot-service/v1/api/open/robot/detail?sn=${encodeURIComponent(sn)}`);
+}
+
+/**
+ * Raw, unfiltered task/list response. For debugging only.
+ */
+export async function getPuduTaskListRaw(sn: string): Promise<any> {
+  return puduFetch(`/cleanbot-service/v1/api/open/task/list?sn=${encodeURIComponent(sn)}`);
+}
+
 export async function getPuduRobotStatus(sn: string): Promise<PuduRobotStatus> {
   const data = await puduFetch(`/cleanbot-service/v1/api/open/robot/detail?sn=${encodeURIComponent(sn)}`);
   const d = data.data || data;
@@ -125,35 +147,88 @@ export async function getPuduRobotStatus(sn: string): Promise<PuduRobotStatus> {
     online: d.online ?? false,
     battery: d.battery ?? 0,
     mapName: d.map?.name ?? null,
+    mapLv: typeof d.map?.lv === 'number' ? d.map.lv : null,
     taskState: mapPuduCleanStatus(cleanStatus),
     currentTask: d.cleanbot?.clean?.result ? d.cleanbot.clean.name || null : null,
     cleanWater: d.cleanbot?.rising ?? 0,
     dirtyWater: d.cleanbot?.sewage ?? 0,
     shopName: d.shop?.name ?? null,
+    shopId: typeof d.shop?.id === 'number' ? d.shop.id : null,
   };
 }
 
-export async function getPuduTaskList(sn: string, filterMapName?: string | null): Promise<PuduTask[]> {
-  const data = await puduFetch(`/cleanbot-service/v1/api/open/task/list?sn=${encodeURIComponent(sn)}`);
-  const items = data.data?.item || data.data || [];
+export async function getPuduTaskList(
+  sn: string,
+  filter?: { mapName?: string | null; mapLv?: number | null } | string | null
+): Promise<PuduTask[]> {
+  // Accept legacy (string mapName) or new ({ mapName, mapLv }) filter forms.
+  // NOTE: mapLv is accepted for backward-compat but no longer used — Pudu's
+  // `lv` field is a map revision counter, not a stable map id, so matching
+  // on it produces false positives.
+  const filterMapName =
+    typeof filter === 'string' ? filter : filter?.mapName ?? null;
 
-  return items
-    .filter((t: any) => {
-      if (t.status === -1) return false;
-      // Filter by robot's current map if provided
-      if (filterMapName) {
-        const taskMap = t.floor_list?.[0]?.map?.name;
-        if (taskMap && taskMap !== filterMapName) return false;
-      }
-      return true;
-    })
-    .map((t: any) => ({
+  const data = await puduFetch(`/cleanbot-service/v1/api/open/task/list?sn=${encodeURIComponent(sn)}`);
+  const items: any[] = data.data?.item || data.data || [];
+
+  const toPuduTask = (t: any): PuduTask => {
+    const firstFloor = Array.isArray(t.floor_list) ? t.floor_list[0] : null;
+    return {
       task_id: t.task_id,
       version: t.version || 0,
       name: t.name || t.task_name || `Task ${t.task_id}`,
       desc: t.desc || '',
       mode: t.config?.mode ?? 0,
-    }));
+      mapName: firstFloor?.map?.name ?? null,
+      floor: firstFloor?.map?.floor ?? null,
+    };
+  };
+
+  // Always drop deleted tasks.
+  const active = items.filter((t: any) => t.status !== -1);
+
+  // A Pudu task can span multiple floors/maps (floor_list is an array).
+  // Match by exact map NAME only — `lv` is not a stable map id.
+  const onCurrentMap = filterMapName
+    ? active.filter((t: any) => {
+        const floors: any[] = Array.isArray(t.floor_list) ? t.floor_list : [];
+        return floors.some((f) => f?.map?.name === filterMapName);
+      })
+    : active;
+
+  // Fallback: if the robot's current map has no defined tasks, return ALL
+  // active tasks so the user can still see and pick one (and re-localize
+  // the robot onto the target map if needed). Returning an empty list here
+  // would leave the user with nothing to act on.
+  const result =
+    filterMapName && onCurrentMap.length === 0 ? active : onCurrentMap;
+  const fellBack = filterMapName != null && onCurrentMap.length === 0;
+
+  console.log(
+    `[pudu] task/list sn=${sn} total=${items.length} onCurrentMap=${onCurrentMap.length} ` +
+      `returned=${result.length}${fellBack ? ' (fallback: no tasks on current map, returning all)' : ''} ` +
+      `filter=${JSON.stringify({ mapName: filterMapName })}`
+  );
+
+  // Diagnostic: dump every task's name + its floor_list maps so we can see
+  // what the filter is actually comparing against. Set PUDU_DEBUG_TASKS=0
+  // in .env to silence.
+  if (process.env.PUDU_DEBUG_TASKS !== '0') {
+    for (const t of items) {
+      const floors = Array.isArray(t.floor_list) ? t.floor_list : [];
+      const maps = floors.map((f: any) => ({
+        name: f?.map?.name ?? null,
+        lv: f?.map?.lv ?? null,
+        floor: f?.map?.floor ?? null,
+      }));
+      console.log(
+        `[pudu]   task "${t.name || t.task_name || t.task_id}" status=${t.status} ` +
+          `maps=${JSON.stringify(maps)}`
+      );
+    }
+  }
+
+  return result.map(toPuduTask);
 }
 
 export async function sendPuduCommand(
