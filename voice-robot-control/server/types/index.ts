@@ -33,6 +33,10 @@ export interface SiteInfo {
       }>;
     }>;
   }>;
+  /** True when the robot is not assigned to a site and site info was built from status fallback */
+  notOnSite?: boolean;
+  /** Free-form note, populated when the site data came from a fallback */
+  note?: string;
 }
 
 // Raw Gausium getSiteInfo response — preserves fields needed to build

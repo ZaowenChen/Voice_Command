@@ -631,6 +631,7 @@ export async function executeTool(
         const type = getRobotType(sn);
 
         if (type === 'pudu') {
+          // Credentials configured → return real data or real error (never mock)
           if (hasPuduCredentials()) {
             try {
               const ps = await puduApi.getPuduRobotStatus(sn);
@@ -646,10 +647,15 @@ export async function executeTool(
                 cleanWater: ps.cleanWater,
                 dirtyWater: ps.dirtyWater,
               });
-            } catch {
-              return JSON.stringify(getMockStatus(sn));
+            } catch (err: any) {
+              console.warn(`[chat-tools] get_robot_status Pudu failed for ${sn}: ${err?.message || err}`);
+              return JSON.stringify({
+                error: err?.message || String(err),
+                note: `Failed to fetch status for Pudu robot ${sn}.`,
+              });
             }
           }
+          // No credentials → dev mode, use mock data
           return JSON.stringify(getMockStatus(sn));
         }
 
@@ -658,10 +664,15 @@ export async function executeTool(
           try {
             const status = await gausiumApi.getRobotStatus(sn);
             return JSON.stringify(status);
-          } catch {
-            return JSON.stringify(getMockStatus(sn));
+          } catch (err: any) {
+            console.warn(`[chat-tools] get_robot_status Gausium failed for ${sn}: ${err?.message || err}`);
+            return JSON.stringify({
+              error: err?.message || String(err),
+              note: `Failed to fetch status for Gausium robot ${sn}.`,
+            });
           }
         }
+        // No credentials → dev mode
         return JSON.stringify(getMockStatus(sn));
       }
 
@@ -672,7 +683,6 @@ export async function executeTool(
         if (type === 'pudu') {
           if (hasPuduCredentials()) {
             try {
-              // Get robot status to know current map for task filtering
               const ps = await puduApi.getPuduRobotStatus(sn);
               const tasks = await puduApi.getPuduTaskList(sn, ps.mapName);
               puduTaskCache.set(sn, tasks);
@@ -687,10 +697,7 @@ export async function executeTool(
                           {
                             id: 'pudu-default',
                             name: ps.mapName || 'Current Map',
-                            tasks: tasks.map((t) => ({
-                              name: t.name,
-                              id: t.task_id,
-                            })),
+                            tasks: tasks.map((t) => ({ name: t.name, id: t.task_id })),
                             positions: [],
                           },
                         ],
@@ -699,8 +706,12 @@ export async function executeTool(
                   },
                 ],
               });
-            } catch {
-              return JSON.stringify(getMockSiteInfo(sn));
+            } catch (err: any) {
+              console.warn(`[chat-tools] get_site_info Pudu failed for ${sn}: ${err?.message || err}`);
+              return JSON.stringify({
+                error: err?.message || String(err),
+                note: `Failed to fetch site info for Pudu robot ${sn}.`,
+              });
             }
           }
           return JSON.stringify(getMockSiteInfo(sn));
@@ -711,8 +722,12 @@ export async function executeTool(
           try {
             const site = await gausiumApi.getSiteInfo(sn);
             return JSON.stringify(site);
-          } catch {
-            return JSON.stringify(getMockSiteInfo(sn));
+          } catch (err: any) {
+            console.warn(`[chat-tools] get_site_info Gausium failed for ${sn}: ${err?.message || err}`);
+            return JSON.stringify({
+              error: err?.message || String(err),
+              note: 'Failed to fetch site info from Gausium API. The robot may not be assigned to a site.',
+            });
           }
         }
         return JSON.stringify(getMockSiteInfo(sn));

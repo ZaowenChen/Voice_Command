@@ -41,9 +41,12 @@ export async function listRobots(): Promise<Robot[]> {
 
 export async function getRobotStatus(sn: string): Promise<RobotStatus> {
   const data = await gausiumFetch(`/v1alpha1/robots/${sn}/status`);
-  // TEMP: log raw status to discover S-line vs M-line fields, cleaning mode values, etc.
-  console.log('[gausium] Raw robot status response for', sn, ':', JSON.stringify(data, null, 2));
   const s = data;
+  console.log(
+    `[gausium] Status ${sn}: online=${s.online}, battery=${s.battery?.powerPercentage}%, ` +
+      `localized=${s.localizationInfo?.localizationState}, map=${s.localizationInfo?.map?.name}, ` +
+      `task=${s.executingTask?.name || 'none'}, taskState=${s.taskState}`,
+  );
   const locState = s.localizationInfo?.localizationState;
   const isLocalized = locState === 'NORMAL' || locState === 'LOCALIZED';
   const mapInfo = s.localizationInfo?.map;
@@ -104,17 +107,17 @@ export async function listRobotMaps(sn: string): Promise<Array<{ mapId: string; 
 export async function getRawSiteInfo(sn: string): Promise<RawSiteInfo | null> {
   try {
     const data = await gausiumFetch(`/openapi/v2alpha1/robots/${sn}/getSiteInfo`);
-    // TEMP: log raw response to discover siteId/siteName/floor.index/area fields
-    console.log('[gausium] Raw getSiteInfo response for', sn, ':', JSON.stringify(data, null, 2));
     const siteData = data.data || data;
     if (siteData.code && siteData.message) {
-      // API-level error (e.g. "robot is not on a site")
-      console.log('[gausium] getSiteInfo returned error:', siteData.code, siteData.message);
+      console.warn(`[gausium] getSiteInfo ${sn}: ${siteData.message}`);
       return null;
     }
     return siteData as RawSiteInfo;
   } catch (err: any) {
-    console.log('[gausium] getSiteInfo threw:', err?.message || err);
+    // Extract the core message (e.g. "The robot is not on a site") without the full JSON body
+    const msg = String(err?.message || err);
+    const match = msg.match(/"message":\s*"([^"]+)"/);
+    console.warn(`[gausium] getSiteInfo failed for ${sn}: ${match?.[1] || msg.split('\n')[0]}`);
     return null;
   }
 }
@@ -125,12 +128,17 @@ export async function getSiteInfo(sn: string): Promise<SiteInfo> {
     // Normalize raw site info into the UI-facing SiteInfo shape.
     return normalizeRawSiteInfo(raw);
   }
-  // Fall back: use status data + V2 map list for richer info
+  // Robot isn't on a site — build a best-effort SiteInfo from status + map list,
+  // and flag that this is fallback data so callers (and GPT) know.
+  console.warn(`[gausium] Building site info from status for ${sn} (robot not on a site)`);
   const [statusData, maps] = await Promise.all([
     gausiumFetch(`/v1alpha1/robots/${sn}/status`),
     listRobotMaps(sn),
   ]);
-  return buildSiteInfoFromStatus(statusData, maps);
+  const site = buildSiteInfoFromStatus(statusData, maps);
+  site.notOnSite = true;
+  site.note = 'Robot is not assigned to a site; site info built from robot status.';
+  return site;
 }
 
 function normalizeRawSiteInfo(raw: RawSiteInfo): SiteInfo {

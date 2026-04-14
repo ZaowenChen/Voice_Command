@@ -212,14 +212,18 @@ router.get('/robots', async (_req, res) => {
       }
     }
 
-    // Fall back to mock data if no real robots
-    if (allRobots.length === 0) {
+    // Only fall back to mock data when NEITHER provider has credentials (dev mode)
+    if (allRobots.length === 0 && !hasGausiumCredentials() && !hasPuduCredentials()) {
       allRobots = getMockRobots();
     }
 
     res.json(allRobots);
   } catch (err: any) {
     console.error('[robots] Error:', err.message);
+    // With real credentials configured, don't silently serve mock data
+    if (hasGausiumCredentials() || hasPuduCredentials()) {
+      return res.status(502).json({ error: err.message });
+    }
     res.json(getMockRobots());
   }
 });
@@ -228,6 +232,7 @@ router.get('/robots', async (_req, res) => {
 router.get('/robots/:sn/status', async (req, res) => {
   const { sn } = req.params;
   const type = getRobotType(sn);
+  const hasRealCreds = (type === 'pudu' && hasPuduCredentials()) || (type === 'gausium' && hasGausiumCredentials());
 
   try {
     if (type === 'pudu' && hasPuduCredentials()) {
@@ -251,9 +256,13 @@ router.get('/robots/:sn/status', async (req, res) => {
       return res.json(status);
     }
 
+    // No credentials for this provider → dev mode mock
     res.json(getMockStatus(sn));
   } catch (err: any) {
-    console.error(`[status] Error for ${sn}:`, err.message);
+    console.error(`[status] Error for ${sn}: ${err.message}`);
+    if (hasRealCreds) {
+      return res.status(502).json({ error: err.message });
+    }
     res.json(getMockStatus(sn));
   }
 });
@@ -262,6 +271,7 @@ router.get('/robots/:sn/status', async (req, res) => {
 router.get('/robots/:sn/site', async (req, res) => {
   const { sn } = req.params;
   const type = getRobotType(sn);
+  const hasRealCreds = (type === 'pudu' && hasPuduCredentials()) || (type === 'gausium' && hasGausiumCredentials());
 
   try {
     if (type === 'pudu' && hasPuduCredentials()) {
@@ -294,9 +304,13 @@ router.get('/robots/:sn/site', async (req, res) => {
       return res.json(site);
     }
 
+    // No credentials → dev mode mock
     res.json(getMockSiteInfo(sn));
   } catch (err: any) {
-    console.error(`[site] Error for ${sn}:`, err.message);
+    console.error(`[site] Error for ${sn}: ${err.message}`);
+    if (hasRealCreds) {
+      return res.status(502).json({ error: err.message, notOnSite: true });
+    }
     res.json(getMockSiteInfo(sn));
   }
 });
