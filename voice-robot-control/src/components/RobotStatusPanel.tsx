@@ -1,11 +1,13 @@
 import type { RobotStatus } from '../types';
+import { isScrubber } from '../utils/robotCategory';
 
 interface Props {
   status: RobotStatus | null;
   loading: boolean;
+  modelTypeCode?: string;
 }
 
-export function RobotStatusPanel({ status, loading }: Props) {
+export function RobotStatusPanel({ status, loading, modelTypeCode }: Props) {
   if (loading && !status) {
     return (
       <div className="animate-pulse space-y-2">
@@ -30,7 +32,7 @@ export function RobotStatusPanel({ status, loading }: Props) {
     error: 'text-red-400',
   };
 
-  const hasPuduWater = status.cleanWater != null || status.dirtyWater != null;
+  const showWater = modelTypeCode && isScrubber(modelTypeCode) && status.cleanWater != null;
 
   return (
     <div className="space-y-2">
@@ -63,7 +65,7 @@ export function RobotStatusPanel({ status, loading }: Props) {
           <span className="text-white">{status.currentTask || 'None'}</span>
         </div>
 
-        {hasPuduWater && (
+        {showWater && (
           <>
             <div className="flex items-center gap-2">
               <span className="text-gray-500">Clean water:</span>

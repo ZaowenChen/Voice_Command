@@ -1,5 +1,5 @@
 import { getAccessToken } from './gausium-auth.js';
-import type { Robot, RobotStatus, SiteInfo } from '../types/index.js';
+import type { Robot, RobotStatus, SiteInfo, RawSiteInfo } from '../types/index.js';
 
 const BASE = 'https://openapi.gs-robot.com';
 
@@ -41,6 +41,8 @@ export async function listRobots(): Promise<Robot[]> {
 
 export async function getRobotStatus(sn: string): Promise<RobotStatus> {
   const data = await gausiumFetch(`/v1alpha1/robots/${sn}/status`);
+  // TEMP: log raw status to discover S-line vs M-line fields, cleaning mode values, etc.
+  console.log('[gausium] Raw robot status response for', sn, ':', JSON.stringify(data, null, 2));
   const s = data;
   const locState = s.localizationInfo?.localizationState;
   const isLocalized = locState === 'NORMAL' || locState === 'LOCALIZED';
@@ -63,6 +65,7 @@ export async function getRobotStatus(sn: string): Promise<RobotStatus> {
           angle: s.localizationInfo.mapPosition.angle,
         }
       : null,
+    cleanModes: (s.cleanModes || []).map((m: any) => m.name).filter(Boolean),
   };
 }
 
@@ -81,38 +84,125 @@ function mapTaskState(state: string | undefined): RobotStatus['taskState'] {
   return 'idle';
 }
 
-export async function getSiteInfo(sn: string): Promise<SiteInfo> {
+export async function listRobotMaps(sn: string): Promise<Array<{ mapId: string; mapName: string }>> {
   try {
-    const data = await gausiumFetch(`/openapi/v2alpha1/robots/${sn}/getSiteInfo`);
-    const siteData = data.data || data;
-    if (siteData.code && siteData.message) {
-      throw new Error(siteData.message);
-    }
-    return siteData;
+    const data = await gausiumFetch('/openapi/v1/map/robotMap/list', {
+      method: 'POST',
+      body: JSON.stringify({ robotSn: sn }),
+    });
+    return data.data || [];
   } catch {
-    // Fall back to building site info from status data
-    const statusData = await gausiumFetch(`/v1alpha1/robots/${sn}/status`);
-    return buildSiteInfoFromStatus(statusData);
+    return [];
   }
 }
 
-function buildSiteInfoFromStatus(statusData: any): SiteInfo {
+/**
+ * Fetch the raw getSiteInfo response without normalization.
+ * Returns null if the robot is not on a site or the call fails.
+ * The raw response is needed to build the v2 "withSite" S-line task body.
+ */
+export async function getRawSiteInfo(sn: string): Promise<RawSiteInfo | null> {
+  try {
+    const data = await gausiumFetch(`/openapi/v2alpha1/robots/${sn}/getSiteInfo`);
+    // TEMP: log raw response to discover siteId/siteName/floor.index/area fields
+    console.log('[gausium] Raw getSiteInfo response for', sn, ':', JSON.stringify(data, null, 2));
+    const siteData = data.data || data;
+    if (siteData.code && siteData.message) {
+      // API-level error (e.g. "robot is not on a site")
+      console.log('[gausium] getSiteInfo returned error:', siteData.code, siteData.message);
+      return null;
+    }
+    return siteData as RawSiteInfo;
+  } catch (err: any) {
+    console.log('[gausium] getSiteInfo threw:', err?.message || err);
+    return null;
+  }
+}
+
+export async function getSiteInfo(sn: string): Promise<SiteInfo> {
+  const raw = await getRawSiteInfo(sn);
+  if (raw && raw.buildings) {
+    // Normalize raw site info into the UI-facing SiteInfo shape.
+    return normalizeRawSiteInfo(raw);
+  }
+  // Fall back: use status data + V2 map list for richer info
+  const [statusData, maps] = await Promise.all([
+    gausiumFetch(`/v1alpha1/robots/${sn}/status`),
+    listRobotMaps(sn),
+  ]);
+  return buildSiteInfoFromStatus(statusData, maps);
+}
+
+function normalizeRawSiteInfo(raw: RawSiteInfo): SiteInfo {
+  const buildings = (raw.buildings || []).map((b) => ({
+    name: b.name || 'Building',
+    floors: (b.floors || []).map((f) => ({
+      name: f.name || `Floor ${f.index ?? ''}`.trim(),
+      maps: (f.maps || []).map((m) => ({
+        id: m.id || 'unknown',
+        name: m.name || 'Unknown Map',
+        tasks: (m.tasks || m.areas || []).map((t: any) => ({
+          name: t.name || 'Unnamed',
+          id: t.id,
+        })),
+        positions: [],
+      })),
+    })),
+  }));
+  return { buildings: buildings.length > 0 ? buildings : [] };
+}
+
+function buildSiteInfoFromStatus(
+  statusData: any,
+  robotMaps: Array<{ mapId: string; mapName: string }> = [],
+): SiteInfo {
   const mapInfo = statusData.localizationInfo?.map;
   const executableTasks = statusData.executableTasks || [];
   const executingTask = statusData.executingTask;
+  const workModes = statusData.workModes || [];
 
   const tasks = executableTasks.map((t: any) => ({ name: t.name, id: t.id }));
   if (executingTask?.name && !tasks.find((t: any) => t.name === executingTask.name)) {
     tasks.push({ name: executingTask.name, id: executingTask.id });
   }
 
-  // Navigation positions are not available from status, return empty
-  const mapEntry = {
-    id: mapInfo?.id || 'unknown',
-    name: mapInfo?.name || 'Unknown Map',
-    tasks,
-    positions: [],
-  };
+  // Build map entries from V2 map list (or fall back to current map from status)
+  const mapEntries: any[] = [];
+  if (robotMaps.length > 0) {
+    for (const m of robotMaps) {
+      const entry: any = {
+        id: m.mapId,
+        name: m.mapName,
+        tasks: mapInfo?.id === m.mapId ? tasks : [],
+        positions: [],
+      };
+      // Attach workModes to the current map
+      if (mapInfo?.id === m.mapId && workModes.length > 0) {
+        entry.workModes = workModes.map((wm: any) => ({
+          id: wm.id,
+          name: wm.name,
+          type: wm.type,
+        }));
+      }
+      mapEntries.push(entry);
+    }
+  } else {
+    // No map list available — use current map from status
+    const entry: any = {
+      id: mapInfo?.id || 'unknown',
+      name: mapInfo?.name || 'Unknown Map',
+      tasks,
+      positions: [],
+    };
+    if (workModes.length > 0) {
+      entry.workModes = workModes.map((wm: any) => ({
+        id: wm.id,
+        name: wm.name,
+        type: wm.type,
+      }));
+    }
+    mapEntries.push(entry);
+  }
 
   return {
     buildings: [
@@ -121,7 +211,7 @@ function buildSiteInfoFromStatus(statusData: any): SiteInfo {
         floors: [
           {
             name: 'Current Floor',
-            maps: [mapEntry],
+            maps: mapEntries,
           },
         ],
       },
@@ -134,4 +224,59 @@ export async function sendCommand(sn: string, commandBody: any): Promise<any> {
     method: 'POST',
     body: JSON.stringify(commandBody),
   });
+}
+
+/**
+ * S-line task submission — robot IS on a site.
+ * POST /openapi/v2/robot/tasks/temp/withSite
+ * Requires the full site-aware body with siteId, siteName, floors[], tasks[].
+ */
+export async function sendSiteTask(taskBody: any): Promise<any> {
+  console.log('[gausium] sendSiteTask body:', JSON.stringify(taskBody, null, 2));
+  const result = await gausiumFetch('/openapi/v2/robot/tasks/temp/withSite', {
+    method: 'POST',
+    body: JSON.stringify(taskBody),
+  });
+  console.log('[gausium] sendSiteTask response:', JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
+ * S-line task submission — robot is NOT on a site (standalone).
+ * POST /openapi/v2/robot/tasks/temp/withoutSite
+ * Body shape:
+ * {
+ *   productId: "<sn>",
+ *   tempTaskCommand: {
+ *     cleaningMode: "清扫",
+ *     loop: false,
+ *     loopCount: 1,
+ *     taskName: "Main-1",
+ *     mapName: "Main-1",
+ *     startParam: [ { mapId: "<uuid>", areaId: "1" } ]
+ *   }
+ * }
+ */
+export async function sendNoSiteTask(taskBody: any): Promise<any> {
+  console.log('[gausium] sendNoSiteTask body:', JSON.stringify(taskBody, null, 2));
+  const result = await gausiumFetch('/openapi/v2/robot/tasks/temp/withoutSite', {
+    method: 'POST',
+    body: JSON.stringify(taskBody),
+  });
+  console.log('[gausium] sendNoSiteTask response:', JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
+ * S-line task submission (v2alpha1 alternative, kept as an additional fallback).
+ * POST /v2alpha1/robotCommand/tempTask:send
+ */
+export async function sendTempTask(taskBody: any): Promise<any> {
+  console.log('[gausium] sendTempTask body:', JSON.stringify(taskBody, null, 2));
+  const result = await gausiumFetch('/v2alpha1/robotCommand/tempTask:send', {
+    method: 'POST',
+    body: JSON.stringify(taskBody),
+  });
+  console.log('[gausium] sendTempTask response:', JSON.stringify(result, null, 2));
+  return result;
 }

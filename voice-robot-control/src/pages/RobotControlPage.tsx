@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Robot, SiteInfo, MapInfo } from '../types';
+import type { Robot, SiteInfo, MapInfo, WorkMode } from '../types';
 import { fetchRobots } from '../services/api';
 import { useRobotStatus } from '../hooks/useRobotStatus';
 import { useChat } from '../hooks/useChat';
 import { useTTS } from '../hooks/useTTS';
+import { isScrubber } from '../utils/robotCategory';
 import { VoiceBar } from '../components/VoiceBar';
 import { AgentOverlay } from '../components/agent/AgentOverlay';
 
@@ -64,14 +65,18 @@ export function RobotControlPage() {
     [handleAgentCommand]
   );
 
-  // Gather tasks and nav points from site info
+  // Gather tasks, work modes, and nav points from site info
   const allTasks: string[] = [];
+  const allWorkModes: WorkMode[] = [];
   const allPositions: Array<{ name: string }> = [];
   if (siteInfo?.buildings) {
     for (const b of siteInfo.buildings) {
       for (const f of b.floors) {
         for (const m of f.maps) {
           for (const t of m.tasks) allTasks.push(t.name);
+          if (m.workModes) {
+            for (const wm of m.workModes) allWorkModes.push(wm);
+          }
           for (const p of m.positions) allPositions.push(p);
         }
       }
@@ -140,8 +145,8 @@ export function RobotControlPage() {
                 : 'Idle'}
             </h2>
 
-            {/* Battery + Map */}
-            <div className="flex items-center gap-4 text-xs mb-4">
+            {/* Battery + Map + Water levels */}
+            <div className="flex items-center gap-4 text-xs mb-4 flex-wrap">
               {status && (
                 <span className={status.battery > 50 ? 'text-green-400' : status.battery > 20 ? 'text-yellow-400' : 'text-red-400'}>
                   <svg className="w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -149,6 +154,22 @@ export function RobotControlPage() {
                   </svg>
                   {status.battery}%
                 </span>
+              )}
+              {robot && isScrubber(robot.modelTypeCode) && status?.cleanWater != null && (
+                <>
+                  <span className="text-blue-400">
+                    <svg className="w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m-7.071-2.929l.707-.707m12.728 0l.707.707M3 12h1m16 0h1" />
+                    </svg>
+                    {status.cleanWater}%
+                  </span>
+                  <span className="text-amber-500">
+                    <svg className="w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                    </svg>
+                    {status.dirtyWater ?? 0}%
+                  </span>
+                </>
               )}
               {status?.currentMap && (
                 <span className="text-gray-400">{status.currentMap}</span>
@@ -223,8 +244,16 @@ export function RobotControlPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
               </svg>
             </div>
-            <p className="text-sm font-semibold text-white">Start task</p>
-            <p className="text-[11px] text-gray-500 mt-0.5">{allTasks.length} available</p>
+            <p className="text-sm font-semibold text-white">
+              {allTasks.length > 0 ? 'Start task' : allWorkModes.length > 0 ? 'Clean modes' : 'Start task'}
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              {allTasks.length > 0
+                ? `${allTasks.length} available`
+                : allWorkModes.length > 0
+                ? `${allWorkModes.length} modes`
+                : '0 available'}
+            </p>
           </button>
 
           <button
@@ -253,7 +282,9 @@ export function RobotControlPage() {
             style={{ background: '#1E293B' }}
           >
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700">
-              <h3 className="text-sm font-semibold text-white">Select a task</h3>
+              <h3 className="text-sm font-semibold text-white">
+                {allTasks.length > 0 ? 'Select a task' : 'Select cleaning mode'}
+              </h3>
               <button onClick={() => setTaskPickerOpen(false)} className="text-gray-500 hover:text-white p-1">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -261,21 +292,36 @@ export function RobotControlPage() {
               </button>
             </div>
             <div className="overflow-y-auto flex-1">
-              {allTasks.length === 0 ? (
-                <p className="text-center text-gray-500 py-8 text-sm">No tasks available</p>
+              {allTasks.length === 0 && allWorkModes.length === 0 ? (
+                <p className="text-center text-gray-500 py-8 text-sm">No tasks or cleaning modes available</p>
               ) : (
-                allTasks.map((task) => (
-                  <button
-                    key={task}
-                    onClick={() => {
-                      setTaskPickerOpen(false);
-                      handleAgentCommand(`Start task "${task}"`);
-                    }}
-                    className="w-full text-left px-5 py-4 border-b border-gray-700/50 hover:bg-white/5 active:bg-white/10 transition-colors"
-                  >
-                    <p className="text-sm text-white">{task}</p>
-                  </button>
-                ))
+                <>
+                  {allTasks.map((task) => (
+                    <button
+                      key={task}
+                      onClick={() => {
+                        setTaskPickerOpen(false);
+                        handleAgentCommand(`Start task "${task}"`);
+                      }}
+                      className="w-full text-left px-5 py-4 border-b border-gray-700/50 hover:bg-white/5 active:bg-white/10 transition-colors"
+                    >
+                      <p className="text-sm text-white">{task}</p>
+                    </button>
+                  ))}
+                  {allTasks.length === 0 && allWorkModes.map((wm) => (
+                    <button
+                      key={wm.id}
+                      onClick={() => {
+                        setTaskPickerOpen(false);
+                        handleAgentCommand(`Start cleaning in "${wm.name}" mode`);
+                      }}
+                      className="w-full text-left px-5 py-4 border-b border-gray-700/50 hover:bg-white/5 active:bg-white/10 transition-colors"
+                    >
+                      <p className="text-sm text-white">{wm.name}</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">Cleaning mode</p>
+                    </button>
+                  ))}
+                </>
               )}
             </div>
           </div>

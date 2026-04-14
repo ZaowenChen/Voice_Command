@@ -18,6 +18,13 @@ function getMockRobots() {
 }
 
 function getRobotType(sn: string): 'gausium' | 'pudu' {
+  // Check env-configured SNs first
+  const gausiumSns = process.env.GAUSIUM_ROBOT_SNS?.split(',').map((s) => s.trim()) || [];
+  if (gausiumSns.includes(sn)) return 'gausium';
+  const puduSns = process.env.PUDU_ROBOT_SNS?.split(',').map((s) => s.trim()) || [];
+  if (puduSns.includes(sn)) return 'pudu';
+
+  // Check mock data
   const mockRobots = getMockRobots();
   const match = mockRobots.find((r: any) => r.serialNumber === sn);
   if (match?.robotType) return match.robotType;
@@ -27,8 +34,17 @@ function getRobotType(sn: string): 'gausium' | 'pudu' {
 
 // ── Mock data ──
 
+function isMockScrubber(sn: string): boolean {
+  const mockRobots = getMockRobots();
+  const match = mockRobots.find((r: any) => r.serialNumber === sn);
+  if (!match) return false;
+  const model = (match.modelTypeCode || '').toLowerCase();
+  return model.includes('scrub') || model.includes('wash') || model.includes('mop');
+}
+
 function getMockStatus(sn: string) {
   const isPudu = getRobotType(sn) === 'pudu';
+  const hasTanks = isMockScrubber(sn) || isPudu;
   return {
     serialNumber: sn,
     battery: 75,
@@ -38,7 +54,7 @@ function getMockStatus(sn: string) {
     currentTask: null,
     taskState: 'idle' as const,
     position: isPudu ? null : { x: 10.5, y: 20.3, angle: 90 },
-    ...(isPudu ? { cleanWater: 80, dirtyWater: 25 } : {}),
+    ...(hasTanks ? { cleanWater: 82, dirtyWater: 23 } : {}),
   };
 }
 
@@ -124,16 +140,54 @@ router.get('/robots', async (_req, res) => {
   try {
     let allRobots: any[] = [];
 
+    // Fetch Gausium robots
     if (hasGausiumCredentials()) {
+      const gausiumSns = process.env.GAUSIUM_ROBOT_SNS?.split(',').map((s) => s.trim()).filter(Boolean) || [];
+
+      // Always try the list API first to get proper display names and model types
+      let listedRobots: any[] = [];
       try {
         const gRobots = await gausiumApi.listRobots();
-        allRobots.push(...gRobots.map((r) => ({ ...r, robotType: 'gausium' })));
+        listedRobots = gRobots.map((r) => ({ ...r, robotType: 'gausium' }));
       } catch (err: any) {
-        console.error('[robots] Gausium error:', err.message);
+        console.error('[robots] Gausium list error:', err.message);
+      }
+
+      if (gausiumSns.length > 0) {
+        // Filter to only the configured SNs, enriching with list data when available
+        for (const gsn of gausiumSns) {
+          const listed = listedRobots.find((r: any) => r.serialNumber === gsn);
+          if (listed) {
+            allRobots.push(listed);
+          } else {
+            // SN not in list response — fetch status to check if online
+            try {
+              const status = await gausiumApi.getRobotStatus(gsn);
+              allRobots.push({
+                serialNumber: gsn,
+                displayName: gsn,
+                modelTypeCode: 'Gausium',
+                online: status.localized ?? true,
+                robotType: 'gausium',
+              });
+            } catch {
+              allRobots.push({
+                serialNumber: gsn,
+                displayName: gsn,
+                modelTypeCode: 'Gausium',
+                online: false,
+                robotType: 'gausium',
+              });
+            }
+          }
+        }
+      } else {
+        // No hardcoded SNs — use all robots from list API
+        allRobots.push(...listedRobots);
       }
     }
 
-    // Add Pudu robots from env config
+    // Fetch Pudu robots from env config
     if (hasPuduCredentials()) {
       const puduSns = process.env.PUDU_ROBOT_SNS?.split(',').map((s) => s.trim()).filter(Boolean) || [];
       for (const psn of puduSns) {
@@ -211,7 +265,8 @@ router.get('/robots/:sn/site', async (req, res) => {
 
   try {
     if (type === 'pudu' && hasPuduCredentials()) {
-      const tasks = await puduApi.getPuduTaskList(sn);
+      const ps = await puduApi.getPuduRobotStatus(sn);
+      const tasks = await puduApi.getPuduTaskList(sn, ps.mapName);
       return res.json({
         buildings: [
           {
@@ -222,7 +277,7 @@ router.get('/robots/:sn/site', async (req, res) => {
                 maps: [
                   {
                     id: 'pudu-default',
-                    name: 'Current Map',
+                    name: ps.mapName || 'Current Map',
                     tasks: tasks.map((t) => ({ name: t.name, id: t.task_id })),
                     positions: [],
                   },

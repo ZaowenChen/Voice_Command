@@ -15,8 +15,9 @@ export interface RobotStatus {
   currentTask: string | null;
   taskState: 'idle' | 'running' | 'paused' | 'error';
   position: { x: number; y: number; angle: number } | null;
-  cleanWater?: number;   // Pudu only: clean water level (0-100)
-  dirtyWater?: number;   // Pudu only: dirty water level (0-100)
+  cleanWater?: number | null;  // 0-100, only present for scrubber-type robots
+  dirtyWater?: number | null;  // 0-100, only present for scrubber-type robots
+  cleanModes?: string[];       // Available Gausium cleaning modes (e.g. ["清扫","清洗","吸尘","尘推"])
 }
 
 export interface SiteInfo {
@@ -32,6 +33,36 @@ export interface SiteInfo {
       }>;
     }>;
   }>;
+}
+
+// Raw Gausium getSiteInfo response — preserves fields needed to build
+// the v2 "withSite" S-line task submission body.
+export interface RawSiteInfo {
+  siteId?: string;
+  siteName?: string;
+  buildings?: Array<{
+    uuid?: string;
+    name?: string;
+    floorNum?: number;
+    floors?: Array<{
+      index?: number;
+      name?: string;
+      maps?: Array<{
+        id?: string;
+        name?: string;
+        areas?: Array<{
+          id?: string;
+          name?: string;
+        }>;
+        tasks?: Array<{
+          id?: string;
+          name?: string;
+        }>;
+      }>;
+    }>;
+  }>;
+  // Allow additional fields we may discover from the raw API response
+  [key: string]: any;
 }
 
 export interface ParsedCommand {

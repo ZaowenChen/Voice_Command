@@ -1,19 +1,67 @@
-const BASE = process.env.PUDU_BASE_URL || 'https://open.pudutech.com';
+import crypto from 'crypto';
+
+const BASE = process.env.PUDU_BASE_URL || 'https://csu-open-platform.pudutech.com';
+const PATH_PREFIX = '/pudu-entry';
 
 export function hasPuduCredentials(): boolean {
-  return !!process.env.PUDU_API_KEY;
+  return !!(process.env.PUDU_API_KEY && process.env.PUDU_APP_SECRET);
+}
+
+// ── HMAC-SHA1 Signature Auth ──
+
+function puduCanonical(path: string, query: string): string {
+  if (!path.startsWith('/')) path = '/' + path;
+  let canonical = path || '/';
+  if (query) {
+    const parts = query.split('&').filter(Boolean).sort();
+    canonical = canonical + '?' + decodeURIComponent(parts.join('&'));
+  }
+  return canonical;
+}
+
+function getPuduHeaders(method: string, fullUrl: string): Record<string, string> {
+  const appKey = process.env.PUDU_API_KEY!;
+  const appSecret = process.env.PUDU_APP_SECRET!;
+  const url = new URL(fullUrl);
+  const canonical = puduCanonical(url.pathname, url.search.replace(/^\?/, ''));
+  const xDate = new Date().toUTCString();
+
+  const signStr =
+    `x-date: ${xDate}\n` +
+    `${method.toUpperCase()}\n` +
+    'application/json\n' +
+    'application/json\n' +
+    '\n' +
+    canonical;
+
+  const sig = crypto
+    .createHmac('sha1', appSecret)
+    .update(signStr)
+    .digest('base64');
+
+  return {
+    Host: url.host,
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    'x-date': xDate,
+    Authorization: `hmac id="${appKey}", algorithm="hmac-sha1", headers="x-date", signature="${sig}"`,
+  };
 }
 
 async function puduFetch(path: string, options: RequestInit = {}) {
-  const token = process.env.PUDU_API_KEY;
-  if (!token) throw new Error('Pudu API key not configured');
+  if (!process.env.PUDU_API_KEY || !process.env.PUDU_APP_SECRET) {
+    throw new Error('Pudu API credentials not configured');
+  }
 
-  const res = await fetch(`${BASE}${path}`, {
+  const method = options.method || 'GET';
+  const fullUrl = `${BASE}${PATH_PREFIX}${path}`;
+  const headers = getPuduHeaders(method, fullUrl);
+
+  const res = await fetch(fullUrl, {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...options.headers,
+      ...headers,
+      ...(options.headers as Record<string, string>),
     },
   });
 
@@ -35,8 +83,8 @@ export interface PuduRobotStatus {
   mapName: string | null;
   taskState: 'idle' | 'running' | 'paused' | 'error';
   currentTask: string | null;
-  cleanWater: number;    // rising (0-100)
-  dirtyWater: number;    // sewage (0-100)
+  cleanWater: number;
+  dirtyWater: number;
   shopName: string | null;
 }
 
@@ -85,16 +133,24 @@ export async function getPuduRobotStatus(sn: string): Promise<PuduRobotStatus> {
   };
 }
 
-export async function getPuduTaskList(sn: string): Promise<PuduTask[]> {
+export async function getPuduTaskList(sn: string, filterMapName?: string | null): Promise<PuduTask[]> {
   const data = await puduFetch(`/cleanbot-service/v1/api/open/task/list?sn=${encodeURIComponent(sn)}`);
-  const items = data.data || [];
-  // Filter out deleted tasks (status === -1)
+  const items = data.data?.item || data.data || [];
+
   return items
-    .filter((t: any) => t.status === 1)
+    .filter((t: any) => {
+      if (t.status === -1) return false;
+      // Filter by robot's current map if provided
+      if (filterMapName) {
+        const taskMap = t.floor_list?.[0]?.map?.name;
+        if (taskMap && taskMap !== filterMapName) return false;
+      }
+      return true;
+    })
     .map((t: any) => ({
       task_id: t.task_id,
-      version: t.version,
-      name: t.name,
+      version: t.version || 0,
+      name: t.name || t.task_name || `Task ${t.task_id}`,
       desc: t.desc || '',
       mode: t.config?.mode ?? 0,
     }));
