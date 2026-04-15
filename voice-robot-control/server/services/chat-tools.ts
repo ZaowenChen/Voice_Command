@@ -26,7 +26,7 @@ export const tools: ChatCompletionTool[] = [
     function: {
       name: 'get_robot_status',
       description:
-        'Get the current status of a specific robot including battery level, localization state, current map, current task, and position. For scrubber-type robots, also returns cleanWater and dirtyWater tank levels (0-100%).',
+        'Get the current status of a specific robot including battery level, localization state, current map, current task, position, available cleaning tasks (executableTasks), and cleaning modes (cleanModes). For scrubber-type robots, also returns cleanWater and dirtyWater tank levels (0-100%). Prefer this over get_site_info when all you need is available tasks and modes for START_TASK.',
       parameters: {
         type: 'object',
         properties: {
@@ -79,6 +79,7 @@ export const tools: ChatCompletionTool[] = [
               'RESUME_TASK',
               'CROSS_NAVIGATE',
               'PAUSE_NAVIGATE',
+              'RESUME_NAVIGATE',
               'STOP_NAVIGATE',
             ],
             description: 'The type of command to send',
@@ -87,13 +88,14 @@ export const tools: ChatCompletionTool[] = [
             type: 'string',
             description: 'The task name (required for START_TASK)',
           },
-          map_id: {
+          map_name: {
             type: 'string',
-            description: 'The map ID for the command',
+            description:
+              'The map name (not UUID) for the command, e.g. "9-2" or "Floor-1". Get this from robot status currentMap or site info map names.',
           },
           position_name: {
             type: 'string',
-            description: 'Target position name (for navigation commands)',
+            description: 'Target navigation point name (for navigation commands, e.g. "Lobby")',
           },
           cleaning_mode: {
             type: 'string',
@@ -101,6 +103,28 @@ export const tools: ChatCompletionTool[] = [
           },
         },
         required: ['serial_number', 'command_type'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_command_status',
+      description:
+        'Check the status of a previously sent command. Use this after send_command to verify the robot accepted it. Returns the command state: WAITING, ACCEPTED, REJECTED, COMPLETED, or FAILED.',
+      parameters: {
+        type: 'object',
+        properties: {
+          serial_number: {
+            type: 'string',
+            description: 'The serial number of the robot',
+          },
+          command_id: {
+            type: 'string',
+            description: 'The command UUID returned from send_command',
+          },
+        },
+        required: ['serial_number', 'command_id'],
       },
     },
   },
@@ -171,15 +195,26 @@ function isMockScrubber(sn: string): boolean {
 function getMockStatus(sn: string) {
   const isPudu = getRobotType(sn) === 'pudu';
   const hasTanks = isMockScrubber(sn) || isPudu;
+  const mapName = isPudu ? 'Lobby-Map' : 'Floor-2';
   return {
     serialNumber: sn,
     battery: 75,
     localized: true,
-    currentMap: isPudu ? 'Lobby-Map' : 'Floor-2',
+    currentMap: mapName,
     currentMapId: isPudu ? 'pudu-map-001' : 'map-001',
     currentTask: null,
     taskState: 'idle',
     position: isPudu ? null : { x: 10.5, y: 20.3, angle: 90 },
+    executableTasks: isPudu
+      ? [
+          { name: 'Full Mop Lobby', id: 'pudu-task-001', mapName },
+          { name: 'Quick Sweep Lobby', id: 'pudu-task-002', mapName },
+        ]
+      : [
+          { name: 'Full Clean F1', id: 'task-001', mapName },
+          { name: 'Quick Sweep F1', id: 'task-002', mapName },
+        ],
+    cleanModes: isPudu ? [] : ['__middle_cleaning', '__heavy_cleaning'],
     ...(hasTanks ? { cleanWater: 82, dirtyWater: 23 } : {}),
   };
 }
@@ -246,10 +281,9 @@ function buildGausiumCommandBody(
   commandType: string,
   args: {
     task_name?: string;
-    map_id?: string;
+    map_name?: string;
     position_name?: string;
     cleaning_mode?: string;
-    positions?: Array<{ name: string; x: number; y: number }>;
   }
 ): any {
   switch (commandType) {
@@ -261,7 +295,7 @@ function buildGausiumCommandBody(
           startTaskParameter: {
             cleaningMode: args.cleaning_mode,
             task: {
-              map: args.map_id,
+              map: args.map_name,
               name: args.task_name || '',
               loop: false,
               loopCount: 1,
@@ -275,32 +309,34 @@ function buildGausiumCommandBody(
       return { serialNumber: sn, remoteTaskCommandType: 'RESUME_TASK' };
     case 'STOP_TASK':
       return { serialNumber: sn, remoteTaskCommandType: 'STOP_TASK' };
-    case 'CROSS_NAVIGATE': {
-      const pos = args.positions?.find(
-        (p) => p.name.toLowerCase() === args.position_name?.toLowerCase()
-      );
+    case 'CROSS_NAVIGATE':
       return {
         serialNumber: sn,
         remoteNavigationCommandType: 'CROSS_NAVIGATE',
         commandParameter: {
           startNavigationParameter: {
-            map: args.map_id,
-            position: pos ? { x: pos.x, y: pos.y } : undefined,
+            map: args.map_name,
+            position: args.position_name,
           },
         },
       };
-    }
     case 'PAUSE_NAVIGATE':
       return {
         serialNumber: sn,
         remoteNavigationCommandType: 'PAUSE_NAVIGATE',
-        commandParameter: { startNavigationParameter: { map: args.map_id } },
+        commandParameter: { startNavigationParameter: { map: args.map_name } },
+      };
+    case 'RESUME_NAVIGATE':
+      return {
+        serialNumber: sn,
+        remoteNavigationCommandType: 'RESUME_NAVIGATE',
+        commandParameter: { startNavigationParameter: { map: args.map_name } },
       };
     case 'STOP_NAVIGATE':
       return {
         serialNumber: sn,
         remoteNavigationCommandType: 'STOP_NAVIGATE',
-        commandParameter: { startNavigationParameter: { map: args.map_id } },
+        commandParameter: { startNavigationParameter: { map: args.map_name } },
       };
     default:
       return { serialNumber: sn };
@@ -346,13 +382,13 @@ function buildSiteTaskBody(
   rawSite: any,
   args: {
     task_name?: string;
-    map_id?: string;
+    map_name?: string;
     cleaning_mode?: string;
   }
 ): any | null {
   if (!rawSite || !rawSite.buildings) return null;
 
-  // Find the target map/floor. Prefer args.map_id; otherwise use the first map found.
+  // Find the target map/floor. Prefer args.map_name; otherwise use the first map found.
   let targetFloor: any = null;
   let targetMap: any = null;
   for (const b of rawSite.buildings || []) {
@@ -362,7 +398,7 @@ function buildSiteTaskBody(
           targetFloor = f;
           targetMap = m;
         }
-        if (args.map_id && m.id === args.map_id) {
+        if (args.map_name && m.name === args.map_name) {
           targetFloor = f;
           targetMap = m;
           break;
@@ -483,8 +519,7 @@ const puduTaskCache = new Map<string, puduApi.PuduTask[]>();
  * Build a SiteInfo for a Pudu robot by grouping tasks by their map name.
  * This makes two tasks that share a name (e.g. two "Carpet Run" entries
  * on different maps) distinguishable — each becomes a task under its own
- * map entry, with the map name as its id so it can be disambiguated by
- * `map_id` when starting the task.
+ * map entry, so it can be disambiguated by `map_name` when starting the task.
  */
 function buildPuduSiteInfo(
   ps: puduApi.PuduRobotStatus,
@@ -516,8 +551,8 @@ function buildPuduSiteInfo(
           {
             name: `Robot is on: ${currentMap}`,
             maps: mapNames.map((mapName) => ({
-              // Prefix with "pudu-" so the agent can pass this back as map_id
-              // and we can route it in send_command.
+              // Prefix with "pudu-" so the agent can pass this back as map_name
+              // (the disambiguation code also strips the prefix if present).
               id: `pudu-${mapName}`,
               name: mapName,
               tasks: (byMap.get(mapName) || []).map((t) => ({
@@ -556,15 +591,15 @@ async function executePuduCommand(
         });
       }
 
-      // Disambiguate duplicate task names by map_id. The agent passes the
-      // "pudu-<mapName>" id from get_site_info when selecting a specific
-      // map's task. If map_id is provided, narrow candidates to that map.
+      // Disambiguate duplicate task names by map_name. The agent passes the
+      // map name from get_site_info when selecting a specific map's task.
+      // Support both the bare map name and the "pudu-<mapName>" legacy id form.
       let match = candidates[0];
       if (candidates.length > 1) {
-        const wantedMap =
-          typeof args.map_id === 'string' && args.map_id.startsWith('pudu-')
-            ? args.map_id.slice('pudu-'.length)
-            : null;
+        const rawMap = typeof args.map_name === 'string' ? args.map_name : null;
+        const wantedMap = rawMap?.startsWith('pudu-')
+          ? rawMap.slice('pudu-'.length)
+          : rawMap;
         if (wantedMap) {
           const narrowed = candidates.find((t) => t.mapName === wantedMap);
           if (narrowed) {
@@ -580,7 +615,7 @@ async function executePuduCommand(
           return JSON.stringify({
             error: `Task "${args.task_name}" is defined on multiple maps (${candidates
               .map((c) => c.mapName || 'unknown')
-              .join(', ')}). Please specify which map by passing map_id.`,
+              .join(', ')}). Please specify which map by passing map_name.`,
           });
         }
       }
@@ -845,7 +880,7 @@ export async function executeTool(
             if (hasSiteStructure) {
               const body = buildSiteTaskBody(sn, rawSite, {
                 task_name: args.task_name,
-                map_id: args.map_id,
+                map_name: args.map_name,
                 cleaning_mode: args.cleaning_mode,
               });
               if (body) {
@@ -865,9 +900,8 @@ export async function executeTool(
             }
 
             // 2. Robot not on a site → withoutSite endpoint (primary S-line path)
-            const mapId =
-              args.map_id ||
-              fullStatus?.localizationInfo?.map?.id;
+            // Resolve internal mapId (UUID, used in startParam.mapId) from status.
+            const mapId = fullStatus?.localizationInfo?.map?.id;
             const mapName =
               args.map_name ||
               fullStatus?.localizationInfo?.map?.name ||
@@ -941,31 +975,51 @@ export async function executeTool(
           // Non-S-line (M-line) falls through to the v1alpha1 commands path below.
         }
 
-        // M-line / navigation / other commands — v1alpha1 commands endpoint
-        let positions: Array<{ name: string; x: number; y: number }> = [];
-        if (commandType === 'CROSS_NAVIGATE' && args.position_name) {
-          try {
-            const site = hasGausiumCredentials()
-              ? await gausiumApi.getSiteInfo(sn)
-              : getMockSiteInfo(sn);
-            for (const b of site.buildings) {
-              for (const f of b.floors) {
-                for (const m of f.maps) {
-                  positions.push(...(m.positions || []));
-                }
-              }
-            }
-          } catch {}
-        }
-
-        const body = buildGausiumCommandBody(sn, commandType, { ...args, positions });
+        // M-line / navigation / other commands — v1alpha1 commands endpoint.
+        // CROSS_NAVIGATE now sends position_name directly as a string (the
+        // named navigation point), so no site-info lookup is needed.
+        const body = buildGausiumCommandBody(sn, commandType, args);
 
         if (hasGausiumCredentials()) {
           const result = await gausiumApi.sendCommand(sn, body);
-          return JSON.stringify({ success: true, data: result });
+          // Extract command UUID from the response `name` field (shape:
+          // "robots/{sn}/commands/{uuid}") so the agent can verify acceptance
+          // via get_command_status.
+          const commandId =
+            typeof result?.name === 'string' ? result.name.split('/').pop() || '' : '';
+          return JSON.stringify({
+            success: true,
+            commandId,
+            state: result?.state,
+            data: result,
+          });
         }
         console.log(`[mock-command] ${sn}:`, JSON.stringify(body));
-        return JSON.stringify({ success: true, data: { message: 'Mock command accepted' } });
+        return JSON.stringify({
+          success: true,
+          commandId: 'mock-command-id',
+          state: 'ACCEPTED',
+          data: { message: 'Mock command accepted' },
+        });
+      }
+
+      case 'get_command_status': {
+        const sn = args.serial_number;
+        const cmdId = args.command_id;
+        if (hasGausiumCredentials()) {
+          try {
+            const result = await gausiumApi.getCommandStatus(sn, cmdId);
+            return JSON.stringify({
+              state: result?.state,
+              rawCommandType: result?.rawCommandType,
+              createTime: result?.createTime,
+              updateTime: result?.updateTime,
+            });
+          } catch (err: any) {
+            return JSON.stringify({ error: err?.message || String(err) });
+          }
+        }
+        return JSON.stringify({ state: 'ACCEPTED', rawCommandType: 'mock' });
       }
 
       default:

@@ -150,25 +150,27 @@ function buildCommandBody(
       return { serialNumber: sn, remoteTaskCommandType: 'RESUME_TASK' };
     case 'stop_task':
       return { serialNumber: sn, remoteTaskCommandType: 'STOP_TASK' };
-    case 'navigate': {
-      const pos = currentMap?.positions.find(
-        (p) => p.name.toLowerCase() === command.parameters.position?.toLowerCase()
-      );
+    case 'navigate':
       return {
         serialNumber: sn,
         remoteNavigationCommandType: 'CROSS_NAVIGATE',
         commandParameter: {
           startNavigationParameter: {
             map: mapId,
-            position: pos ? { x: pos.x, y: pos.y } : undefined,
+            position: command.parameters.position,
           },
         },
       };
-    }
     case 'pause_navigate':
       return {
         serialNumber: sn,
         remoteNavigationCommandType: 'PAUSE_NAVIGATE',
+        commandParameter: { startNavigationParameter: { map: mapId } },
+      };
+    case 'resume_navigate':
+      return {
+        serialNumber: sn,
+        remoteNavigationCommandType: 'RESUME_NAVIGATE',
         commandParameter: { startNavigationParameter: { map: mapId } },
       };
     case 'stop_navigate':
