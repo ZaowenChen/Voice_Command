@@ -77,7 +77,7 @@ export function Sidebar({
 
           {selectedSN && (
             <>
-              <RobotStatusPanel status={status} loading={statusLoading} />
+              <RobotStatusPanel status={status} loading={statusLoading} modelTypeCode={robots.find(r => r.serialNumber === selectedSN)?.modelTypeCode} />
 
               {status && !status.localized && (
                 <div className="bg-red-900/60 border border-red-700 rounded-lg px-3 py-2 text-red-300 text-xs flex items-center gap-1">

@@ -42,10 +42,8 @@ export function useChat(selectedRobotSN: string | null) {
 
       try {
         // Build API messages (only role + content, no UI metadata)
-        // Filter out synthetic welcome message and cap history to last 20 messages
         const apiMessages = [...messages, userMsg]
-          .filter((m) => m.id !== 'welcome')
-          .slice(-20)
+          .filter((m) => m.id !== 'welcome' || m.role === 'assistant')
           .map((m) => ({ role: m.role, content: m.content }));
 
         const { reply, toolCalls } = await sendChatMessage(apiMessages, selectedRobotSN || undefined);

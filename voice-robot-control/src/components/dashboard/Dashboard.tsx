@@ -20,7 +20,7 @@ export function Dashboard({ robot, status, statusLoading, currentMap, onAgentCom
       {robot && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <VitalsPanel status={status} online={robot.online} />
+            <VitalsPanel status={status} online={robot.online} robot={robot} />
             <ActiveTask status={status} onAgentCommand={onAgentCommand} />
           </div>
           <TaskGrid currentMap={currentMap} onAgentCommand={onAgentCommand} />

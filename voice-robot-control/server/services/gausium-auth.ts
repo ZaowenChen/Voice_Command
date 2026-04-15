@@ -38,25 +38,9 @@ export async function getAccessToken(): Promise<string> {
   const data = (await res.json()) as GausiumTokenResponse;
   cachedToken = data.access_token;
   refreshToken = data.refresh_token;
+  tokenExpiresAt = Date.now() + data.expires_in * 1000;
 
-  // Handle expires_in as either: absolute epoch ms, absolute epoch seconds, or relative duration seconds
-  if (data.expires_in > 1_000_000_000_000) {
-    // Absolute epoch timestamp in milliseconds (e.g. 1726111975164)
-    tokenExpiresAt = data.expires_in;
-  } else if (data.expires_in > 1_000_000_000) {
-    // Absolute epoch timestamp in seconds (e.g. 1726111975)
-    tokenExpiresAt = data.expires_in * 1000;
-  } else {
-    // Relative duration in seconds (standard OAuth2 expires_in)
-    tokenExpiresAt = Date.now() + data.expires_in * 1000;
-  }
-
-  console.log(
-    '[gausium-auth] Token acquired, raw expires_in:',
-    data.expires_in,
-    '→ expires at:',
-    new Date(tokenExpiresAt).toISOString()
-  );
+  console.log('[gausium-auth] Token acquired, expires in', data.expires_in, 's');
   return cachedToken;
 }
 

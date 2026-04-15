@@ -3,6 +3,7 @@ export interface Robot {
   displayName: string;
   modelTypeCode: string;
   online: boolean;
+  robotType?: 'gausium' | 'pudu';
 }
 
 export interface RobotStatus {
@@ -14,6 +15,14 @@ export interface RobotStatus {
   currentTask: string | null;
   taskState: 'idle' | 'running' | 'paused' | 'error';
   position: { x: number; y: number; angle: number } | null;
+  cleanWater?: number | null;  // 0-100, only present for scrubber-type robots
+  dirtyWater?: number | null;  // 0-100, only present for scrubber-type robots
+}
+
+export interface WorkMode {
+  id: string;
+  name: string;
+  type?: string;
 }
 
 export interface MapInfo {
@@ -21,6 +30,7 @@ export interface MapInfo {
   name: string;
   tasks: Array<{ name: string; id?: string }>;
   positions: Array<{ name: string; x: number; y: number }>;
+  workModes?: WorkMode[];
 }
 
 export interface SiteInfo {

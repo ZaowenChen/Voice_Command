@@ -1,0 +1,248 @@
+import crypto from 'crypto';
+
+const BASE = process.env.PUDU_BASE_URL || 'https://csu-open-platform.pudutech.com';
+const PATH_PREFIX = '/pudu-entry';
+
+export function hasPuduCredentials(): boolean {
+  return !!(process.env.PUDU_API_KEY && process.env.PUDU_APP_SECRET);
+}
+
+// ── HMAC-SHA1 Signature Auth ──
+
+function puduCanonical(path: string, query: string): string {
+  if (!path.startsWith('/')) path = '/' + path;
+  let canonical = path || '/';
+  if (query) {
+    const parts = query.split('&').filter(Boolean).sort();
+    canonical = canonical + '?' + decodeURIComponent(parts.join('&'));
+  }
+  return canonical;
+}
+
+function getPuduHeaders(method: string, fullUrl: string): Record<string, string> {
+  const appKey = process.env.PUDU_API_KEY!;
+  const appSecret = process.env.PUDU_APP_SECRET!;
+  const url = new URL(fullUrl);
+  const canonical = puduCanonical(url.pathname, url.search.replace(/^\?/, ''));
+  const xDate = new Date().toUTCString();
+
+  const signStr =
+    `x-date: ${xDate}\n` +
+    `${method.toUpperCase()}\n` +
+    'application/json\n' +
+    'application/json\n' +
+    '\n' +
+    canonical;
+
+  const sig = crypto
+    .createHmac('sha1', appSecret)
+    .update(signStr)
+    .digest('base64');
+
+  return {
+    Host: url.host,
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    'x-date': xDate,
+    Authorization: `hmac id="${appKey}", algorithm="hmac-sha1", headers="x-date", signature="${sig}"`,
+  };
+}
+
+async function puduFetch(path: string, options: RequestInit = {}) {
+  if (!process.env.PUDU_API_KEY || !process.env.PUDU_APP_SECRET) {
+    throw new Error('Pudu API credentials not configured');
+  }
+
+  const method = options.method || 'GET';
+  const fullUrl = `${BASE}${PATH_PREFIX}${path}`;
+  const headers = getPuduHeaders(method, fullUrl);
+
+  const res = await fetch(fullUrl, {
+    ...options,
+    headers: {
+      ...headers,
+      ...(options.headers as Record<string, string>),
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Pudu API ${path} failed (${res.status}): ${text}`);
+  }
+
+  return res.json();
+}
+
+// ── Types ──
+
+export interface PuduRobotStatus {
+  serialNumber: string;
+  nickname: string;
+  online: boolean;
+  battery: number;
+  mapName: string | null;
+  /** Map level identifier from Pudu (stable numeric id for a floor/map). */
+  mapLv: number | null;
+  taskState: 'idle' | 'running' | 'paused' | 'error';
+  currentTask: string | null;
+  cleanWater: number;
+  dirtyWater: number;
+  shopName: string | null;
+  shopId: number | null;
+}
+
+export interface PuduTask {
+  task_id: string;
+  version: number;
+  name: string;
+  desc: string;
+  mode: number; // 1=mop, 2=sweep
+  /** Map name this task is defined on (first entry in floor_list). Used to
+   * disambiguate duplicate task names and to show which map a task runs on. */
+  mapName: string | null;
+  /** Floor string from the task's floor_list entry (e.g. "1", "3"). */
+  floor: string | null;
+}
+
+// ── Machine state code → taskState mapping ──
+
+function mapPuduCleanStatus(status: number | null | undefined): PuduRobotStatus['taskState'] {
+  switch (status) {
+    case 1: return 'running';
+    case 2: return 'paused';
+    case 3: return 'error';   // interrupted
+    case 5: return 'error';
+    case 0:
+    case 4:
+    case 6:
+    default: return 'idle';
+  }
+}
+
+// ── API Functions ──
+
+/**
+ * Raw, unfiltered robot/detail response. For debugging only.
+ */
+export async function getPuduRobotDetailRaw(sn: string): Promise<any> {
+  return puduFetch(`/cleanbot-service/v1/api/open/robot/detail?sn=${encodeURIComponent(sn)}`);
+}
+
+/**
+ * Raw, unfiltered task/list response. For debugging only.
+ */
+export async function getPuduTaskListRaw(sn: string): Promise<any> {
+  return puduFetch(`/cleanbot-service/v1/api/open/task/list?sn=${encodeURIComponent(sn)}`);
+}
+
+export async function getPuduRobotStatus(sn: string): Promise<PuduRobotStatus> {
+  const data = await puduFetch(`/cleanbot-service/v1/api/open/robot/detail?sn=${encodeURIComponent(sn)}`);
+  const d = data.data || data;
+
+  const cleanStatus = d.cleanbot?.clean?.result?.status ?? null;
+
+  return {
+    serialNumber: sn,
+    nickname: d.nickname || sn,
+    online: d.online ?? false,
+    battery: d.battery ?? 0,
+    mapName: d.map?.name ?? null,
+    mapLv: typeof d.map?.lv === 'number' ? d.map.lv : null,
+    taskState: mapPuduCleanStatus(cleanStatus),
+    currentTask: d.cleanbot?.clean?.result ? d.cleanbot.clean.name || null : null,
+    cleanWater: d.cleanbot?.rising ?? 0,
+    dirtyWater: d.cleanbot?.sewage ?? 0,
+    shopName: d.shop?.name ?? null,
+    shopId: typeof d.shop?.id === 'number' ? d.shop.id : null,
+  };
+}
+
+export async function getPuduTaskList(
+  sn: string,
+  filter?: { mapName?: string | null; mapLv?: number | null } | string | null
+): Promise<PuduTask[]> {
+  // Accept legacy (string mapName) or new ({ mapName, mapLv }) filter forms.
+  // NOTE: mapLv is accepted for backward-compat but no longer used — Pudu's
+  // `lv` field is a map revision counter, not a stable map id, so matching
+  // on it produces false positives.
+  const filterMapName =
+    typeof filter === 'string' ? filter : filter?.mapName ?? null;
+
+  const data = await puduFetch(`/cleanbot-service/v1/api/open/task/list?sn=${encodeURIComponent(sn)}`);
+  const items: any[] = data.data?.item || data.data || [];
+
+  const toPuduTask = (t: any): PuduTask => {
+    const firstFloor = Array.isArray(t.floor_list) ? t.floor_list[0] : null;
+    return {
+      task_id: t.task_id,
+      version: t.version || 0,
+      name: t.name || t.task_name || `Task ${t.task_id}`,
+      desc: t.desc || '',
+      mode: t.config?.mode ?? 0,
+      mapName: firstFloor?.map?.name ?? null,
+      floor: firstFloor?.map?.floor ?? null,
+    };
+  };
+
+  // Always drop deleted tasks.
+  const active = items.filter((t: any) => t.status !== -1);
+
+  // A Pudu task can span multiple floors/maps (floor_list is an array).
+  // Match by exact map NAME only — `lv` is not a stable map id.
+  const onCurrentMap = filterMapName
+    ? active.filter((t: any) => {
+        const floors: any[] = Array.isArray(t.floor_list) ? t.floor_list : [];
+        return floors.some((f) => f?.map?.name === filterMapName);
+      })
+    : active;
+
+  // Fallback: if the robot's current map has no defined tasks, return ALL
+  // active tasks so the user can still see and pick one (and re-localize
+  // the robot onto the target map if needed). Returning an empty list here
+  // would leave the user with nothing to act on.
+  const result =
+    filterMapName && onCurrentMap.length === 0 ? active : onCurrentMap;
+  const fellBack = filterMapName != null && onCurrentMap.length === 0;
+
+  console.log(
+    `[pudu] task/list sn=${sn} total=${items.length} onCurrentMap=${onCurrentMap.length} ` +
+      `returned=${result.length}${fellBack ? ' (fallback: no tasks on current map, returning all)' : ''} ` +
+      `filter=${JSON.stringify({ mapName: filterMapName })}`
+  );
+
+  // Diagnostic: dump every task's name + its floor_list maps so we can see
+  // what the filter is actually comparing against. Set PUDU_DEBUG_TASKS=0
+  // in .env to silence.
+  if (process.env.PUDU_DEBUG_TASKS !== '0') {
+    for (const t of items) {
+      const floors = Array.isArray(t.floor_list) ? t.floor_list : [];
+      const maps = floors.map((f: any) => ({
+        name: f?.map?.name ?? null,
+        lv: f?.map?.lv ?? null,
+        floor: f?.map?.floor ?? null,
+      }));
+      console.log(
+        `[pudu]   task "${t.name || t.task_name || t.task_id}" status=${t.status} ` +
+          `maps=${JSON.stringify(maps)}`
+      );
+    }
+  }
+
+  return result.map(toPuduTask);
+}
+
+export async function sendPuduCommand(
+  sn: string,
+  type: number,
+  clean?: Record<string, any>
+): Promise<string> {
+  const body: any = { sn, type };
+  if (clean) body.clean = clean;
+
+  const data = await puduFetch('/cleanbot-service/v1/api/open/task/exec', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+
+  return data.data?.task_id || data.message || 'ok';
+}

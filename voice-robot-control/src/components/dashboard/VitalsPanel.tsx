@@ -1,16 +1,20 @@
-import type { RobotStatus } from '../../types';
+import type { Robot, RobotStatus } from '../../types';
+import { isScrubber } from '../../utils/robotCategory';
 
 interface Props {
   status: RobotStatus | null;
   online: boolean;
+  robot: Robot | null;
 }
 
-export function VitalsPanel({ status, online }: Props) {
+export function VitalsPanel({ status, online, robot }: Props) {
   const battery = status?.battery ?? 0;
   const batteryColor =
     battery > 50 ? 'text-green-400' : battery > 20 ? 'text-yellow-400' : 'text-red-400';
   const batteryBarColor =
     battery > 50 ? 'bg-green-500' : battery > 20 ? 'bg-yellow-500' : 'bg-red-500';
+
+  const showWater = robot && isScrubber(robot.modelTypeCode) && status?.cleanWater != null;
 
   return (
     <div className="bg-gray-850 rounded-2xl border border-gray-700 p-5">
@@ -29,6 +33,38 @@ export function VitalsPanel({ status, online }: Props) {
         <div className="w-full bg-gray-700 rounded-full h-2">
           <div className={`h-2 rounded-full ${batteryBarColor} transition-all duration-500`} style={{ width: `${battery}%` }} />
         </div>
+
+        {/* Clean Water — scrubbers only */}
+        {showWater && (
+          <>
+            <div className="flex items-center justify-between pt-2">
+              <div className="flex items-center gap-2">
+                <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m-7.071-2.929l.707-.707m12.728 0l.707.707M3 12h1m16 0h1m-2.929-7.071l-.707.707M6.343 6.343l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" />
+                </svg>
+                <span className="text-sm text-gray-400">Clean Water</span>
+              </div>
+              <span className="text-lg font-bold text-blue-400">{status?.cleanWater ?? 0}%</span>
+            </div>
+            <div className="w-full bg-gray-700 rounded-full h-2">
+              <div className="h-2 rounded-full bg-blue-500 transition-all duration-500" style={{ width: `${status?.cleanWater ?? 0}%` }} />
+            </div>
+
+            {/* Dirty Water */}
+            <div className="flex items-center justify-between pt-2">
+              <div className="flex items-center gap-2">
+                <svg className="w-5 h-5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                </svg>
+                <span className="text-sm text-gray-400">Dirty Water</span>
+              </div>
+              <span className="text-lg font-bold text-amber-500">{status?.dirtyWater ?? 0}%</span>
+            </div>
+            <div className="w-full bg-gray-700 rounded-full h-2">
+              <div className="h-2 rounded-full bg-amber-600 transition-all duration-500" style={{ width: `${status?.dirtyWater ?? 0}%` }} />
+            </div>
+          </>
+        )}
 
         {/* Current Map */}
         <div className="flex items-center justify-between pt-2">
