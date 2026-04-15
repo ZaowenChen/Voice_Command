@@ -15,9 +15,10 @@ export interface RobotStatus {
   currentTask: string | null;
   taskState: 'idle' | 'running' | 'paused' | 'error';
   position: { x: number; y: number; angle: number } | null;
+  executableTasks: Array<{ name: string; id: string; mapName: string }>;
+  cleanModes: string[];        // Available Gausium cleaning modes (e.g. ["清扫","清洗","吸尘","尘推"])
   cleanWater?: number | null;  // 0-100, only present for scrubber-type robots
   dirtyWater?: number | null;  // 0-100, only present for scrubber-type robots
-  cleanModes?: string[];       // Available Gausium cleaning modes (e.g. ["清扫","清洗","吸尘","尘推"])
 }
 
 export interface SiteInfo {
@@ -78,6 +79,7 @@ export interface ParsedCommand {
     | 'navigate'
     | 'stop_navigate'
     | 'pause_navigate'
+    | 'resume_navigate'
     | 'status'
     | 'unknown';
   confidence: number;

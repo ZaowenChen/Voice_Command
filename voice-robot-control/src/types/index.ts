@@ -52,6 +52,7 @@ export interface ParsedCommand {
     | 'navigate'
     | 'stop_navigate'
     | 'pause_navigate'
+    | 'resume_navigate'
     | 'status'
     | 'unknown';
   confidence: number;

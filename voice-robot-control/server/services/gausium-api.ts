@@ -68,6 +68,11 @@ export async function getRobotStatus(sn: string): Promise<RobotStatus> {
           angle: s.localizationInfo.mapPosition.angle,
         }
       : null,
+    executableTasks: (s.executableTasks || []).map((t: any) => ({
+      name: t.name,
+      id: t.id,
+      mapName: t.map?.name ?? mapInfo?.name ?? '',
+    })),
     cleanModes: (s.cleanModes || []).map((m: any) => m.name).filter(Boolean),
   };
 }
@@ -131,11 +136,34 @@ export async function getSiteInfo(sn: string): Promise<SiteInfo> {
   // Robot isn't on a site — build a best-effort SiteInfo from status + map list,
   // and flag that this is fallback data so callers (and GPT) know.
   console.warn(`[gausium] Building site info from status for ${sn} (robot not on a site)`);
+
+  // Try to get navigation points from V2 S-line status before giving up.
+  // This endpoint returns named navigation points which are what CROSS_NAVIGATE
+  // needs — without them, navigation is non-functional.
+  let navigationPoints: Array<{ name: string; x: number; y: number }> = [];
+  try {
+    const v2Status = await gausiumFetch(`/openapi/v2alpha1/s/robots/${sn}/status`);
+    const naviPoints =
+      v2Status?.navigationPoints?.naviPoints ||
+      v2Status?.data?.navigationPoints?.naviPoints;
+    if (Array.isArray(naviPoints)) {
+      navigationPoints = naviPoints
+        .filter((p: any) => p.naviPointName && p.naviPointName !== 'Current')
+        .map((p: any) => ({
+          name: p.naviPointName,
+          x: p.navPointGridX ?? 0,
+          y: p.navPointGridY ?? 0,
+        }));
+    }
+  } catch {
+    // V2 S-line status not available for this robot, continue with empty positions
+  }
+
   const [statusData, maps] = await Promise.all([
     gausiumFetch(`/v1alpha1/robots/${sn}/status`),
     listRobotMaps(sn),
   ]);
-  const site = buildSiteInfoFromStatus(statusData, maps);
+  const site = buildSiteInfoFromStatus(statusData, maps, navigationPoints);
   site.notOnSite = true;
   site.note = 'Robot is not assigned to a site; site info built from robot status.';
   return site;
@@ -163,6 +191,7 @@ function normalizeRawSiteInfo(raw: RawSiteInfo): SiteInfo {
 function buildSiteInfoFromStatus(
   statusData: any,
   robotMaps: Array<{ mapId: string; mapName: string }> = [],
+  navigationPoints: Array<{ name: string; x: number; y: number }> = [],
 ): SiteInfo {
   const mapInfo = statusData.localizationInfo?.map;
   const executableTasks = statusData.executableTasks || [];
@@ -178,14 +207,15 @@ function buildSiteInfoFromStatus(
   const mapEntries: any[] = [];
   if (robotMaps.length > 0) {
     for (const m of robotMaps) {
+      const isCurrentMap = mapInfo?.id === m.mapId;
       const entry: any = {
         id: m.mapId,
         name: m.mapName,
-        tasks: mapInfo?.id === m.mapId ? tasks : [],
-        positions: [],
+        tasks: isCurrentMap ? tasks : [],
+        positions: isCurrentMap ? navigationPoints : [],
       };
       // Attach workModes to the current map
-      if (mapInfo?.id === m.mapId && workModes.length > 0) {
+      if (isCurrentMap && workModes.length > 0) {
         entry.workModes = workModes.map((wm: any) => ({
           id: wm.id,
           name: wm.name,
@@ -200,7 +230,7 @@ function buildSiteInfoFromStatus(
       id: mapInfo?.id || 'unknown',
       name: mapInfo?.name || 'Unknown Map',
       tasks,
-      positions: [],
+      positions: navigationPoints,
     };
     if (workModes.length > 0) {
       entry.workModes = workModes.map((wm: any) => ({
@@ -232,6 +262,15 @@ export async function sendCommand(sn: string, commandBody: any): Promise<any> {
     method: 'POST',
     body: JSON.stringify(commandBody),
   });
+}
+
+/**
+ * Check the status of a previously sent command. Use after sendCommand to
+ * verify whether the robot actually accepted the command (vs. the default
+ * WAITING state returned by the initial send).
+ */
+export async function getCommandStatus(sn: string, commandId: string): Promise<any> {
+  return gausiumFetch(`/v1alpha1/robots/${sn}/commands/${commandId}`);
 }
 
 /**
