@@ -5,7 +5,7 @@ import { fetchRobots } from '../services/api';
 import { useRobotStatus } from '../hooks/useRobotStatus';
 import { useChat } from '../hooks/useChat';
 import { useTTS } from '../hooks/useTTS';
-import { isScrubber } from '../utils/robotCategory';
+import { showsWaterLevels } from '../utils/robotCategory';
 import { VoiceBar } from '../components/VoiceBar';
 import { AgentOverlay } from '../components/agent/AgentOverlay';
 
@@ -100,8 +100,12 @@ export function RobotControlPage() {
             </svg>
           </button>
           <div className="min-w-0">
-            <h1 className="text-lg font-bold text-white truncate">{robot?.displayName || sn}</h1>
-            {robot && <p className="text-[11px] text-gray-500">{robot.serialNumber}</p>}
+            <h1 className="text-lg font-bold text-white truncate">
+              {robot?.displayName || status?.displayName || sn}
+            </h1>
+            {(robot || status) && (
+              <p className="text-[11px] text-gray-500">{robot?.serialNumber || sn}</p>
+            )}
           </div>
         </div>
         <button
@@ -129,11 +133,11 @@ export function RobotControlPage() {
               border: isTaskRunning ? '1px solid #34D39933' : '1px solid #334155',
             }}
           >
-            {robot && (
+            {(robot?.modelTypeCode || status?.modelTypeCode) && (
               <p className={`text-[10px] uppercase tracking-widest font-medium mb-1 ${
                 isTaskRunning ? 'text-green-400' : 'text-gray-500'
               }`}>
-                {robot.modelTypeCode}
+                {robot?.modelTypeCode || status?.modelTypeCode}
               </p>
             )}
 
@@ -155,7 +159,7 @@ export function RobotControlPage() {
                   {status.battery}%
                 </span>
               )}
-              {robot && isScrubber(robot.modelTypeCode) && status?.cleanWater != null && (
+              {showsWaterLevels(robot?.robotType, robot?.modelTypeCode || status?.modelTypeCode) && status?.cleanWater != null && (
                 <>
                   <span className="text-blue-400">
                     <svg className="w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -215,8 +219,23 @@ export function RobotControlPage() {
               </div>
             )}
 
-            {/* Localization warning */}
-            {status && !status.localized && (
+            {/* Offline warning — shown when the cloud can't reach the robot
+                at all. Takes precedence over the localization warning. */}
+            {status && status.online === false && (
+              <div className="mt-4 rounded-lg px-3 py-2 bg-red-500/10 border border-red-500/20">
+                <p className="text-xs text-red-400">
+                  <svg className="w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3m8.293 8.293l1.414 1.414" />
+                  </svg>
+                  Robot offline — commands will fail until it reconnects
+                </p>
+              </div>
+            )}
+
+            {/* Localization warning (Gausium only in practice — Pudu has no
+                polling localization signal, so the server sets
+                localized: true for Pudu). */}
+            {status && status.online !== false && !status.localized && (
               <div className="mt-4 rounded-lg px-3 py-2 bg-red-500/10 border border-red-500/20">
                 <p className="text-xs text-red-400">
                   <svg className="w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -293,7 +312,14 @@ export function RobotControlPage() {
             </div>
             <div className="overflow-y-auto flex-1">
               {allTasks.length === 0 && allWorkModes.length === 0 ? (
-                <p className="text-center text-gray-500 py-8 text-sm">No tasks or cleaning modes available</p>
+                <div className="px-5 py-8 text-sm text-center">
+                  <p className="text-gray-400 mb-2">No tasks available for this robot's current map.</p>
+                  {siteInfo?.note && (
+                    <p className="text-gray-500 text-xs leading-relaxed mt-3">
+                      {siteInfo.note}
+                    </p>
+                  )}
+                </div>
               ) : (
                 <>
                   {allTasks.map((task) => (

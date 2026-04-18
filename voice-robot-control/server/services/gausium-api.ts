@@ -57,6 +57,7 @@ export async function getRobotStatus(sn: string): Promise<RobotStatus> {
     serialNumber: sn,
     battery: s.battery?.powerPercentage ?? 0,
     localized: isLocalized,
+    online: s.online ?? undefined,
     currentMap: mapInfo?.name ?? null,
     currentMapId: mapInfo?.id ?? null,
     currentTask: executingTask?.name ?? null,
@@ -82,6 +83,33 @@ export async function getRobotFullStatus(sn: string) {
   const data = await gausiumFetch(`/v1alpha1/robots/${sn}/status`);
   return data;
 }
+
+/**
+ * Debug helper: fetch the raw v2alpha1 S-line status (if available).
+ * Returns null on failure. Useful for inspecting fields like
+ * navigationPoints, areas, tasks, and workModes that the v1 endpoint
+ * doesn't expose.
+ */
+export async function getSLineStatusRaw(sn: string): Promise<any | null> {
+  try {
+    return await gausiumFetch(`/openapi/v2alpha1/s/robots/${sn}/status`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Debug helper: fetch the raw v2alpha1 getSiteInfo response without
+ * normalization. Used by the /api/debug/gausium/:sn diagnostic endpoint.
+ */
+export async function getRawSiteInfoDebug(sn: string): Promise<any | null> {
+  try {
+    return await gausiumFetch(`/openapi/v2alpha1/robots/${sn}/getSiteInfo`);
+  } catch (err: any) {
+    return { __error: String(err?.message || err) };
+  }
+}
+
 
 function mapTaskState(state: string | undefined): RobotStatus['taskState'] {
   if (!state) return 'idle';

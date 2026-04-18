@@ -9,7 +9,12 @@ export interface Robot {
 export interface RobotStatus {
   serialNumber: string;
   battery: number;
+  /** Whether the robot is localized on its map. For Pudu this is always `true`
+   * because polling doesn't expose localization — delocalization events arrive
+   * via the robotErrorNotice webhook only. */
   localized: boolean;
+  /** Whether the robot is online (reachable by the cloud). */
+  online?: boolean;
   currentMap: string | null;
   currentMapId: string | null;
   currentTask: string | null;
@@ -19,6 +24,16 @@ export interface RobotStatus {
   cleanModes: string[];        // Available Gausium cleaning modes (e.g. ["清扫","清洗","吸尘","尘推"])
   cleanWater?: number | null;  // 0-100, only present for scrubber-type robots
   dirtyWater?: number | null;  // 0-100, only present for scrubber-type robots
+  /** Display name, carried through so the detail page can render without
+   * waiting for `/api/robots` to resolve. */
+  displayName?: string;
+  /** Model type hint (e.g. "Pudu", "Scrubber S2"). */
+  modelTypeCode?: string;
+  /** Optional store / shop name (Pudu only). */
+  shopName?: string;
+  /** Manufacturer hint so the frontend can render manufacturer-specific UI
+   * before `/api/robots` resolves. */
+  robotType?: 'gausium' | 'pudu';
 }
 
 export interface SiteInfo {
