@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Robot, RobotStatus, MapInfo } from '../types';
+import type { Robot, RobotStatus, MapInfo, SiteInfo } from '../types';
 import { RobotSelector } from './RobotSelector';
 import { RobotStatusPanel } from './RobotStatusPanel';
 import { TaskList } from './TaskList';
@@ -13,6 +13,7 @@ interface Props {
   status: RobotStatus | null;
   statusLoading: boolean;
   currentMap: MapInfo | null;
+  siteInfo: SiteInfo | null;
   ttsEnabled: boolean;
   onToggleTTS: () => void;
   onNewChat: () => void;
@@ -28,6 +29,7 @@ export function Sidebar({
   status,
   statusLoading,
   currentMap,
+  siteInfo,
   ttsEnabled,
   onToggleTTS,
   onNewChat,
@@ -77,9 +79,28 @@ export function Sidebar({
 
           {selectedSN && (
             <>
-              <RobotStatusPanel status={status} loading={statusLoading} modelTypeCode={robots.find(r => r.serialNumber === selectedSN)?.modelTypeCode} />
+              {(() => {
+                const selectedRobot = robots.find((r) => r.serialNumber === selectedSN);
+                return (
+                  <RobotStatusPanel
+                    status={status}
+                    loading={statusLoading}
+                    modelTypeCode={selectedRobot?.modelTypeCode}
+                    robotType={selectedRobot?.robotType}
+                  />
+                );
+              })()}
 
-              {status && !status.localized && (
+              {status && status.online === false && (
+                <div className="bg-red-900/60 border border-red-700 rounded-lg px-3 py-2 text-red-300 text-xs flex items-center gap-1">
+                  <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3m8.293 8.293l1.414 1.414" />
+                  </svg>
+                  Offline
+                </div>
+              )}
+
+              {status && status.online !== false && !status.localized && (
                 <div className="bg-red-900/60 border border-red-700 rounded-lg px-3 py-2 text-red-300 text-xs flex items-center gap-1">
                   <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
@@ -105,7 +126,7 @@ export function Sidebar({
 
               {showDetails && (
                 <div className="space-y-3">
-                  <TaskList currentMap={currentMap} />
+                  <TaskList currentMap={currentMap} emptyNote={siteInfo?.note} />
                   <NavigationPoints currentMap={currentMap} />
                 </div>
               )}

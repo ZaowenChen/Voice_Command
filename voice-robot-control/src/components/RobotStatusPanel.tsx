@@ -1,13 +1,14 @@
 import type { RobotStatus } from '../types';
-import { isScrubber } from '../utils/robotCategory';
+import { showsWaterLevels } from '../utils/robotCategory';
 
 interface Props {
   status: RobotStatus | null;
   loading: boolean;
   modelTypeCode?: string;
+  robotType?: 'gausium' | 'pudu';
 }
 
-export function RobotStatusPanel({ status, loading, modelTypeCode }: Props) {
+export function RobotStatusPanel({ status, loading, modelTypeCode, robotType }: Props) {
   if (loading && !status) {
     return (
       <div className="animate-pulse space-y-2">
@@ -32,7 +33,7 @@ export function RobotStatusPanel({ status, loading, modelTypeCode }: Props) {
     error: 'text-red-400',
   };
 
-  const showWater = modelTypeCode && isScrubber(modelTypeCode) && status.cleanWater != null;
+  const showWater = showsWaterLevels(robotType, modelTypeCode) && status.cleanWater != null;
 
   return (
     <div className="space-y-2">

@@ -187,28 +187,31 @@ router.get('/robots', async (_req, res) => {
       }
     }
 
-    // Fetch Pudu robots from env config
+    // Fetch Pudu robots from env config. `robot/detail` doesn't expose the
+    // model — product_code lives on the V2 status endpoint (§3.1). We fetch
+    // both in parallel so either failing doesn't hide the robot.
     if (hasPuduCredentials()) {
       const puduSns = process.env.PUDU_ROBOT_SNS?.split(',').map((s) => s.trim()).filter(Boolean) || [];
       for (const psn of puduSns) {
-        try {
-          const status = await puduApi.getPuduRobotStatus(psn);
-          allRobots.push({
-            serialNumber: psn,
-            displayName: status.nickname,
-            modelTypeCode: 'Pudu CC1',
-            online: status.online,
-            robotType: 'pudu',
-          });
-        } catch {
-          allRobots.push({
-            serialNumber: psn,
-            displayName: psn,
-            modelTypeCode: 'Pudu CC1',
-            online: false,
-            robotType: 'pudu',
-          });
-        }
+        const [statusRes, v2Res] = await Promise.allSettled([
+          puduApi.getPuduRobotStatus(psn),
+          puduApi.getPuduRobotStatusV2(psn),
+        ]);
+        const status = statusRes.status === 'fulfilled' ? statusRes.value : null;
+        const v2 = v2Res.status === 'fulfilled' ? v2Res.value : null;
+        const productCode =
+          typeof v2?.product_code === 'string' && v2.product_code
+            ? v2.product_code
+            : null;
+        allRobots.push({
+          serialNumber: psn,
+          displayName: status?.nickname || psn,
+          modelTypeCode: productCode ? `Pudu ${productCode}` : 'Pudu',
+          online:
+            status?.online ??
+            (v2?.run_state ? v2.run_state !== 'OFFLINE' : false),
+          robotType: 'pudu',
+        });
       }
     }
 
@@ -236,11 +239,30 @@ router.get('/robots/:sn/status', async (req, res) => {
 
   try {
     if (type === 'pudu' && hasPuduCredentials()) {
-      const ps = await puduApi.getPuduRobotStatus(sn);
+      // Fetch detail + V2 status in parallel — V2 carries `product_code`
+      // (the model) and `run_state`. `robot/detail` has no model field.
+      const [psRes, v2Res] = await Promise.allSettled([
+        puduApi.getPuduRobotStatus(sn),
+        puduApi.getPuduRobotStatusV2(sn),
+      ]);
+      if (psRes.status !== 'fulfilled') throw psRes.reason;
+      const ps = psRes.value;
+      const v2 = v2Res.status === 'fulfilled' ? v2Res.value : null;
+      const productCode =
+        typeof v2?.product_code === 'string' && v2.product_code
+          ? v2.product_code
+          : null;
       return res.json({
         serialNumber: sn,
         battery: ps.battery,
-        localized: ps.online,
+        // §1.5 exposes `cleanbot.task === -200` (LostLocation) on polling,
+        // so we now flag delocalization from the detail response itself.
+        // Transient drift still needs the `robotErrorNotice` webhook — but
+        // this at least catches the durable "robot needs re-localize" case
+        // that otherwise quietly returns empty/wrong task lists.
+        localized: ps.online && ps.localized,
+        online: ps.online,
+        robotActivityCode: ps.robotActivityCode,
         currentMap: ps.mapName,
         currentMapId: null,
         currentTask: ps.currentTask,
@@ -248,12 +270,16 @@ router.get('/robots/:sn/status', async (req, res) => {
         position: null,
         cleanWater: ps.cleanWater,
         dirtyWater: ps.dirtyWater,
+        displayName: ps.nickname,
+        modelTypeCode: productCode ? `Pudu ${productCode}` : 'Pudu',
+        shopName: ps.shopName ?? undefined,
+        robotType: 'pudu',
       });
     }
 
     if (type === 'gausium' && hasGausiumCredentials()) {
       const status = await gausiumApi.getRobotStatus(sn);
-      return res.json(status);
+      return res.json({ ...status, robotType: 'gausium' });
     }
 
     // No credentials for this provider → dev mode mock
@@ -276,13 +302,15 @@ router.get('/robots/:sn/site', async (req, res) => {
   try {
     if (type === 'pudu' && hasPuduCredentials()) {
       const ps = await puduApi.getPuduRobotStatus(sn);
-      const tasks = await puduApi.getPuduTaskList(sn, {
-        mapName: ps.mapName,
-        mapLv: ps.mapLv,
-      });
 
-      // Group tasks by map so duplicate names (e.g. two "Carpet Run"
-      // entries on different maps) are distinguishable in the sidebar.
+      // If the robot is delocalized, its reported `map.name` is stale and
+      // any filter built from it will be nonsense — skip the map filter and
+      // surface a clear banner instead of silently showing wrong tasks.
+      // Otherwise filter strictly to the current map (no cross-map leakage).
+      const tasks = ps.localized
+        ? await puduApi.getPuduTaskList(sn, { mapName: ps.mapName })
+        : [];
+
       const currentMap = ps.mapName || 'Current Map';
       const byMap = new Map<string, typeof tasks>();
       for (const t of tasks) {
@@ -295,6 +323,21 @@ router.get('/robots/:sn/site', async (req, res) => {
         if (b === currentMap) return 1;
         return a.localeCompare(b);
       });
+
+      // Friendly note for the empty cases so the UI can show *why* there
+      // are no tasks rather than appearing broken.
+      let note: string | undefined;
+      if (!ps.localized) {
+        note =
+          `Robot is not localized (activity code ${ps.robotActivityCode}). ` +
+          `Re-localize it on the robot UI — the cloud can't list tasks reliably ` +
+          `until the robot confirms which map it's on.`;
+      } else if (tasks.length === 0) {
+        note =
+          `No cleaning tasks are defined on the robot's current map "${currentMap}". ` +
+          `Create a task on this map from the Pudu app, or switch the robot to a map ` +
+          `that already has tasks saved.`;
+      }
 
       return res.json({
         buildings: [
@@ -316,6 +359,9 @@ router.get('/robots/:sn/site', async (req, res) => {
             ],
           },
         ],
+        localized: ps.localized,
+        currentMap,
+        note,
       });
     }
 
@@ -362,6 +408,45 @@ router.post('/robots/:sn/commands', async (req, res) => {
   }
 });
 
+// ── Debug: raw Gausium dump ──
+// GET /api/debug/gausium/:sn — returns the raw v1 status, v2 S-line status,
+// v2 getSiteInfo, and robot map list responses side-by-side. Use this to
+// see exactly what Gausium is reporting for a specific robot.
+router.get('/debug/gausium/:sn', async (req, res) => {
+  const { sn } = req.params;
+  if (!hasGausiumCredentials()) {
+    return res.status(400).json({ error: 'Gausium credentials not configured' });
+  }
+  try {
+    const [v1Status, sLineStatus, rawSite, maps] = await Promise.all([
+      gausiumApi.getRobotFullStatus(sn).catch((e: any) => ({ __error: e?.message || String(e) })),
+      gausiumApi.getSLineStatusRaw(sn),
+      gausiumApi.getRawSiteInfoDebug(sn),
+      gausiumApi.listRobotMaps(sn).catch(() => []),
+    ]);
+    const summary = {
+      executableTaskCount: Array.isArray(v1Status?.executableTasks)
+        ? v1Status.executableTasks.length
+        : 0,
+      executableTaskNames: (v1Status?.executableTasks || []).map((t: any) => t?.name),
+      cleanModeNames: (v1Status?.cleanModes || []).map((m: any) => m?.name),
+      workModeNames: (v1Status?.workModes || []).map((m: any) => m?.name),
+      currentMapName: v1Status?.localizationInfo?.map?.name ?? null,
+      currentMapId: v1Status?.localizationInfo?.map?.id ?? null,
+      executingTaskName: v1Status?.executingTask?.name ?? null,
+      executingTaskId: v1Status?.executingTask?.id ?? null,
+      taskState: v1Status?.taskState ?? null,
+      v1StatusTopLevelKeys: v1Status ? Object.keys(v1Status) : [],
+      sLineStatusTopLevelKeys: sLineStatus ? Object.keys(sLineStatus) : null,
+      mapCount: maps?.length ?? 0,
+      mapNames: (maps || []).map((m: any) => m.mapName),
+    };
+    res.json({ summary, v1_status_raw: v1Status, s_line_status_raw: sLineStatus, raw_site_info: rawSite, robot_maps_raw: maps });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Debug: raw Pudu dump ──
 // GET /api/debug/pudu/:sn — returns the raw robot/detail and task/list
 // responses from Pudu with no filtering, grouping, or transformation.
@@ -372,24 +457,88 @@ router.get('/debug/pudu/:sn', async (req, res) => {
     return res.status(400).json({ error: 'Pudu credentials not configured' });
   }
   try {
-    const detail = await puduApi.getPuduRobotDetailRaw(sn);
-    const taskList = await puduApi.getPuduTaskListRaw(sn);
-    // Extract just the fields that matter for the missing-task diagnosis
+    const [detail, taskList, availableMaps, currentMap, v2Status] = await Promise.all([
+      puduApi.getPuduRobotDetailRaw(sn),
+      puduApi.getPuduTaskListRaw(sn),
+      puduApi.getPuduAvailableMaps(sn).catch((e: any) => ({ __error: e?.message || String(e) })),
+      puduApi.getPuduCurrentMap(sn).catch((e: any) => ({ __error: e?.message || String(e) })),
+      puduApi.getPuduRobotStatusV2(sn).catch((e: any) => ({ __error: e?.message || String(e) })),
+    ]);
+
+    const activityCode =
+      typeof detail?.data?.cleanbot?.task === 'number'
+        ? detail.data.cleanbot.task
+        : null;
+    const detailMapName = detail?.data?.map?.name ?? null;
+    const taskItems: any[] = taskList?.data?.item || [];
+    const activeTaskItems = taskItems.filter((t) => t.status !== -1);
+
+    const taskMapNames = Array.from(
+      new Set(
+        activeTaskItems.flatMap((t) =>
+          (t.floor_list || []).map((f: any) => f?.map?.name).filter(Boolean)
+        )
+      )
+    ).sort();
+
+    const tasksOnCurrentMap = detailMapName
+      ? activeTaskItems
+          .filter((t) =>
+            (t.floor_list || []).some(
+              (f: any) => f?.map?.name === detailMapName
+            )
+          )
+          .map((t) => t.name)
+      : [];
+
+    // Core diagnosis: one number that tells you *why* tasks are missing.
+    let diagnosis: string;
+    if (activityCode === -200) {
+      diagnosis =
+        'ROBOT_DELOCALIZED — cleanbot.task === -200 (LostLocation, §1.5). ' +
+        'Re-localize on the robot UI; task filtering by current map is unreliable until it re-localizes.';
+    } else if (!detailMapName) {
+      diagnosis =
+        'NO_CURRENT_MAP — robot/detail reported no map. Likely not localized, or robot has no map loaded.';
+    } else if (activeTaskItems.length === 0) {
+      diagnosis =
+        'NO_TASKS_RETURNED — task/list returned 0 active tasks for this SN. Tasks may be saved locally on the robot but not synced to the cloud, or the ApiAppKey lacks scope to this store.';
+    } else if (tasksOnCurrentMap.length === 0) {
+      diagnosis =
+        `MAP_NAME_MISMATCH — robot is on "${detailMapName}" but no task.floor_list[].map.name matches it exactly. ` +
+        `Pudu map names are "floor#id#descriptive" and exact match is required. Compare task_map_names vs robot_current_map.name. ` +
+        `A re-saved map bumps the embedded id; tasks tied to the old id won't match the new one.`;
+    } else {
+      diagnosis = `OK — ${tasksOnCurrentMap.length} task(s) exactly match the robot's current map name.`;
+    }
+
     const summary = {
+      diagnosis,
       robot_current_map: detail?.data?.map ?? null,
+      robot_online: detail?.data?.online ?? null,
+      robot_activity_code: activityCode,
+      robot_localized: activityCode !== -200,
+      robot_product_code: (v2Status as any)?.product_code ?? null,
+      robot_run_state: (v2Status as any)?.run_state ?? null,
       robot_shop: detail?.data?.shop ?? null,
       robot_mac: detail?.data?.mac ?? null,
-      task_count: taskList?.data?.count ?? 0,
-      task_map_names: Array.from(
-        new Set(
-          (taskList?.data?.item || []).flatMap((t: any) =>
-            (t.floor_list || []).map((f: any) => f?.map?.name).filter(Boolean)
-          )
-        )
-      ).sort(),
-      task_names: (taskList?.data?.item || []).map((t: any) => t.name),
+      task_count_reported: taskList?.data?.count ?? 0,
+      task_count_active: activeTaskItems.length,
+      task_count_deleted: taskItems.length - activeTaskItems.length,
+      tasks_on_current_map: tasksOnCurrentMap,
+      task_map_names: taskMapNames,
+      task_names: activeTaskItems.map((t) => t.name),
+      available_maps: availableMaps,
+      current_map_per_map_service: currentMap,
     };
-    res.json({ summary, robot_detail_raw: detail, task_list_raw: taskList });
+    res.json({
+      summary,
+      robot_detail_raw: detail,
+      task_list_raw: taskList,
+      available_maps_raw: availableMaps,
+      current_map_raw: currentMap,
+      v2_status_raw: v2Status,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

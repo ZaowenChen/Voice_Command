@@ -9,7 +9,12 @@ export interface Robot {
 export interface RobotStatus {
   serialNumber: string;
   battery: number;
+  /** Whether the robot is localized on its map. For Pudu this is always `true`
+   * because the polling endpoint doesn't expose localization state — true
+   * delocalization events arrive via the robotErrorNotice webhook only. */
   localized: boolean;
+  /** Whether the robot is online (reachable by the cloud). */
+  online?: boolean;
   currentMap: string | null;
   currentMapId: string | null;
   currentTask: string | null;
@@ -17,6 +22,16 @@ export interface RobotStatus {
   position: { x: number; y: number; angle: number } | null;
   cleanWater?: number | null;  // 0-100, only present for scrubber-type robots
   dirtyWater?: number | null;  // 0-100, only present for scrubber-type robots
+  /** Robot display name, echoed from the backend so the detail page can
+   * render something even before `/api/robots` resolves. */
+  displayName?: string;
+  /** Model type hint (e.g. "Pudu", "Scrubber S2"). Same rationale as above. */
+  modelTypeCode?: string;
+  /** Optional store / shop name (Pudu only). */
+  shopName?: string;
+  /** Manufacturer hint so UI helpers (e.g. showsWaterLevels) work before
+   * `/api/robots` has resolved. */
+  robotType?: 'gausium' | 'pudu';
 }
 
 export interface WorkMode {
@@ -41,6 +56,14 @@ export interface SiteInfo {
       maps: MapInfo[];
     }>;
   }>;
+  /** Optional explanation when `maps` is empty — e.g. robot delocalized, or
+   * no tasks are defined on the robot's current map. Pudu-only today. */
+  note?: string;
+  /** Whether the robot reports being localized. Pudu derives this from
+   * `cleanbot.task === -200`; `true` when absent. */
+  localized?: boolean;
+  /** Map the robot reports being on (may be stale if delocalized). */
+  currentMap?: string;
 }
 
 export interface ParsedCommand {

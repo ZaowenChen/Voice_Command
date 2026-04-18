@@ -24,6 +24,21 @@ app.get('/api/health', (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`[server] Running on http://localhost:${PORT}`);
-  console.log(`[server] Gausium credentials: ${process.env.GAUSIUM_CLIENT_ID ? 'configured' : 'NOT configured (using mock data)'}`);
-  console.log(`[server] OpenAI key: ${process.env.OPENAI_API_KEY ? 'configured' : 'NOT configured'}`);
+  console.log(
+    `[server] Gausium credentials: ${
+      process.env.GAUSIUM_CLIENT_ID ? 'configured' : 'NOT configured (using mock data)'
+    }`
+  );
+  const puduConfigured =
+    !!process.env.PUDU_API_KEY && !!process.env.PUDU_APP_SECRET;
+  const puduSnCount =
+    process.env.PUDU_ROBOT_SNS?.split(',').map((s) => s.trim()).filter(Boolean).length || 0;
+  console.log(
+    `[server] Pudu credentials: ${
+      puduConfigured ? 'configured' : 'NOT configured (using mock data)'
+    }${puduConfigured ? ` (${puduSnCount} robot SN${puduSnCount === 1 ? '' : 's'})` : ''}`
+  );
+  console.log(
+    `[server] OpenAI key: ${process.env.OPENAI_API_KEY ? 'configured' : 'NOT configured'}`
+  );
 });

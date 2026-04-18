@@ -1,5 +1,5 @@
 import type { Robot, RobotStatus } from '../../types';
-import { isScrubber } from '../../utils/robotCategory';
+import { showsWaterLevels } from '../../utils/robotCategory';
 
 interface Props {
   status: RobotStatus | null;
@@ -14,7 +14,10 @@ export function VitalsPanel({ status, online, robot }: Props) {
   const batteryBarColor =
     battery > 50 ? 'bg-green-500' : battery > 20 ? 'bg-yellow-500' : 'bg-red-500';
 
-  const showWater = robot && isScrubber(robot.modelTypeCode) && status?.cleanWater != null;
+  const showWater =
+    !!robot &&
+    showsWaterLevels(robot.robotType, robot.modelTypeCode) &&
+    status?.cleanWater != null;
 
   return (
     <div className="bg-gray-850 rounded-2xl border border-gray-700 p-5">
